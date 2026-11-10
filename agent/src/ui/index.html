@@ -53,6 +53,27 @@
         <p class="muted">Ending a session restores every window this agent moved aside.</p>
       </section>
 
+      <!-- DEC-021/T-064: the cancellable scheduled-session heads-up (FR-012). -->
+      <section
+        id="schedule-section"
+        class="card card--focus"
+        aria-labelledby="schedule-title"
+        hidden
+      >
+        <h2 id="schedule-title" class="card__title">
+          <span class="focus-dot" aria-hidden="true">●</span>
+          Scheduled focus session
+        </h2>
+        <p id="schedule-countdown" class="countdown" role="timer" aria-live="off">—</p>
+        <p id="schedule-line" class="muted"></p>
+        <button id="schedule-cancel" class="button button--quiet" type="button">
+          Cancel scheduled session
+        </button>
+        <p id="schedule-hint" class="muted">
+          You can also cancel from the Focus Agent tray menu until the countdown reaches zero.
+        </p>
+      </section>
+
       <section id="alert-section" class="card card--warning" aria-labelledby="alert-title" hidden>
         <h2 id="alert-title" class="card__title">Needs attention</h2>
         <ul id="alert-list" class="alerts"></ul>

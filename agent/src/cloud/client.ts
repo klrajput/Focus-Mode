@@ -59,6 +59,8 @@ export interface CloudEventMap {
   readonly paired: { readonly deviceId: string; readonly userId: string };
   readonly revoked: { readonly reason: 'REVOKED' | 'TOKEN_INVALID' };
   readonly scheduleDue: ScheduleDueMessage;
+  /** Transport up/down; the session reporter flushes queued reports on `connected: true`. */
+  readonly connected: { readonly connected: boolean };
 }
 
 export type CloudEventName = keyof CloudEventMap;
@@ -193,6 +195,25 @@ export class CloudClient {
     const credentials = this.#credentials;
     if (credentials === undefined) return null;
     return { deviceId: credentials.deviceId, userId: credentials.userId };
+  }
+
+  /**
+   * The stored device token, for the one place that must call the cloud itself with device auth:
+   * the scheduled-start allow-list fetch (C-20, DEC-021). Never logged, never put on any wire
+   * except that Bearer header; null while unpaired, which is how "never start unpaired" is
+   * enforced in the schedule flow.
+   */
+  getDeviceToken(): string | null {
+    return this.#credentials?.deviceToken ?? null;
+  }
+
+  /**
+   * Sends one agent → cloud frame (session reports, `scheduleRunCancelled`). Returns false while
+   * the link is not open so the caller can queue (T-069) instead of losing the report.
+   */
+  sendCloudMessage(message: CloudMessage): boolean {
+    if (this.#stopped) return false;
+    return this.#socket?.send(message) ?? false;
   }
 
   /** Dashboard `paired` nudge: harmless, triggers one immediate poll (contract §5.1 step 4). */
@@ -374,6 +395,8 @@ export class CloudClient {
       onMessage: (message) => this.#handleCloudMessage(message),
       onOpen: () => {
         this.#connected = true;
+        // T-069: the reporter queues while the link is down; this is its flush trigger.
+        this.#emit('connected', { connected: true });
       },
       onClose: (info) => {
         this.#connected = false;
@@ -382,6 +405,7 @@ export class CloudClient {
             code: info.code,
           });
         }
+        this.#emit('connected', { connected: false });
       },
       onTokenRejected: () => {
         void this.#handleRevoked('TOKEN_INVALID');

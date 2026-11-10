@@ -12,6 +12,7 @@ import {
   focusRejectedMessageSchema,
   focusStartedMessageSchema,
   helloMessageSchema,
+  scheduleHeadsUpMessageSchema,
   stateMessageSchema,
   type AgentCapabilities,
   type AgentState,
@@ -28,6 +29,7 @@ import {
   type HelloMessage,
   type OsName,
   type RunningApp,
+  type ScheduleHeadsUpMessage,
   type SessionInfo,
   type StateMessage,
 } from '@focus-mode/shared';
@@ -184,5 +186,23 @@ export function buildAuthError(code: ErrorCode, message: string): AuthErrorMessa
     type: 'authError',
     code,
     message,
+  });
+}
+
+/**
+ * Purely informational ≥10 s heads-up broadcast to authenticated dashboards (contract §4.5,
+ * FR-012). It announces a local decision the agent already made — it is not a command and the
+ * dashboard cannot start, cancel or extend the run with it (INV-2).
+ */
+export function buildScheduleHeadsUp(announcement: {
+  readonly scheduleId: string;
+  readonly startsAt: string;
+}): ScheduleHeadsUpMessage {
+  return scheduleHeadsUpMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'scheduleHeadsUp',
+    scheduleId: announcement.scheduleId,
+    startsAt: announcement.startsAt,
   });
 }

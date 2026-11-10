@@ -10,6 +10,7 @@ import {
   consentSchema,
   durationMinSchema,
   focusSourceSchema,
+  objectIdSchema,
   uuidSchema,
   type AgentCapabilities,
   type AgentState,
@@ -48,6 +49,12 @@ const enterFocusRequestSchema = z.strictObject({
   consent: consentSchema.optional(),
   /** REC-005 "keep distractions aside"; absent means ON (the product default). */
   reaside: z.boolean().optional(),
+  /**
+   * DEC-021: the `scheduleRuns._id` this session fulfils. Agent-internal only — it is never part
+   * of the local-channel `enterFocus` schema, so a dashboard cannot set it; the scheduled flow
+   * passes it so the lifecycle report can carry `scheduleRunId` to the cloud.
+   */
+  scheduleRunId: objectIdSchema.optional(),
 });
 
 export interface EnterFocusRequest {
@@ -59,6 +66,8 @@ export interface EnterFocusRequest {
   readonly consent?: { readonly acceptedAt: string; readonly version: string };
   /** REC-005; default true. `false` makes the enforcement loop issue zero driver calls. */
   readonly reaside?: boolean;
+  /** DEC-021: present only for a scheduler-started session; echoed in the lifecycle event. */
+  readonly scheduleRunId?: string;
 }
 
 /** What the link server/UI may report; session is absent unless a focus session is active. */
@@ -84,7 +93,11 @@ export type FocusLifecycleEvent =
       readonly sessionId: string;
       readonly at: string;
       readonly endsAt: string;
+      /** Planned duration of the session; the cloud report needs it explicitly (T-069). */
+      readonly plannedMinutes: number;
       readonly source: FocusSource;
+      /** DEC-021: set only when the scheduler started this session. */
+      readonly scheduleRunId?: string;
     }
   | ({ readonly type: 'focusEnded' } & FocusEndedEvent);
 
@@ -463,7 +476,9 @@ export class FocusController {
       sessionId: updatedEntry.sessionId,
       at: updatedEntry.startedAt,
       endsAt: updatedEntry.endsAt,
+      plannedMinutes: updatedEntry.plannedMinutes,
       source,
+      ...(valid.scheduleRunId === undefined ? {} : { scheduleRunId: valid.scheduleRunId }),
     });
     return this.getState();
   }

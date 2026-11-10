@@ -54,6 +54,11 @@ export interface AgentTrayOptions {
   readonly consentStatus?: () => ConsentStatusView | null;
   /** REC-004 revoke. Omitted → the tray only displays the consent status. */
   readonly resetConsent?: () => void;
+  /**
+   * DEC-021/T-064: cancel the scheduled run in its heads-up. Omitted → the menu shows no Cancel
+   * item, but the window still offers one (main always provides it).
+   */
+  readonly cancelScheduledSession?: () => void;
 }
 
 type TrayImage = ReturnType<typeof nativeImage.createFromDataURL>;
@@ -143,7 +148,8 @@ export class AgentTray {
     this.#tray.setContextMenu(
       Menu.buildFromTemplate(model.entries.map((entry) => this.#template(entry))),
     );
-    this.#scheduleRefresh(state.state === 'FOCUSING');
+    // A pending scheduled run counts down in seconds, so refresh it as often as a live focus.
+    this.#scheduleRefresh(state.state === 'FOCUSING' || (state.pendingSchedule ?? null) !== null);
   }
 
   destroy(): void {
@@ -210,6 +216,11 @@ export class AgentTray {
     switch (action) {
       case 'end-focus':
         this.#options.endFocus();
+        return;
+      case 'cancel-schedule':
+        // DEC-021: cancelling the heads-up starts nothing; main sends `scheduleRunCancelled`.
+        this.#options.cancelScheduledSession?.();
+        this.refresh();
         return;
       case 'show-window':
       case 'show-pairing-code':

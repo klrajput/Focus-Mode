@@ -3,6 +3,9 @@
 // Host, missing subprotocol, oversized frame, fourth connection, rate limit, malformed frames
 // and unauthenticated control messages. The hello frame carries state but never the pairing
 // code (DEC-003). The server is Electron-free, so this runs in plain Node.
+// It also pins the two pairing transitions of KI-010 (agent half): a dashboard that connected
+// before pairing receives a fresh `hello {paired:true}` + `challenge` with no page reload, and
+// unpairing policy-closes every dashboard socket so it re-handshakes as unpaired.
 
 import { createServer, type Server as NetServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -10,6 +13,8 @@ import { networkInterfaces } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   authErrorMessageSchema,
+  authOkMessageSchema,
+  challengeMessageSchema,
   focusRejectedMessageSchema,
   helloMessageSchema,
   localMessageSchema,
@@ -443,5 +448,99 @@ describe('LinkServer messages', () => {
     expect(await portIsFree(port)).toBe(true);
     const restarted = await startLink({ port });
     expect(restarted.address).toEqual({ host: '127.0.0.1', port });
+  });
+});
+
+describe('pairing transitions (KI-010 agent half, FR-004)', () => {
+  const DEVICE_ID = '507f1f77bcf86cd799439011';
+  const USER_ID = '507f1f77bcf86cd799439012';
+
+  it('re-issues hello {paired:true} + a fresh challenge on an already-connected socket', async () => {
+    // The dashboard connected while the agent was unpaired: hello said paired:false, no challenge.
+    let binding: { deviceId: string; userId: string } | null = null;
+    const { server, address } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: binding !== null }),
+    });
+
+    const client = await connect(address.port);
+    const firstHello = helloMessageSchema.parse(await client.next());
+    expect(firstHello.paired).toBe(false);
+
+    // The enroll poll succeeded: the agent is paired while this socket is still open.
+    binding = { deviceId: DEVICE_ID, userId: USER_ID };
+    server.refreshPairing();
+
+    // A fresh hello is what tells the dashboard the pairing state changed (no page reload).
+    const refreshedHello = helloMessageSchema.parse(await client.next());
+    expect(refreshedHello.paired).toBe(true);
+    expect(refreshedHello.state).toBe('PAIRED');
+    // …followed by a new single-use nonce, so the dashboard can attest right away.
+    const challenge = challengeMessageSchema.parse(await client.next());
+    expect(challenge.nonce.length).toBeGreaterThanOrEqual(16);
+    expect(challenge.nonce.length).toBeLessThanOrEqual(128);
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('issues no refresh while the agent is still unpaired', async () => {
+    const { server, address } = await startLink({
+      getPairing: () => null,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: false }),
+    });
+
+    const client = await connect(address.port);
+    expect(helloMessageSchema.parse(await client.next()).paired).toBe(false);
+    server.refreshPairing();
+
+    // Nothing follows: no challenge exists without a pairing binding.
+    const nextFrame = await Promise.race([
+      client.next(),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 150)),
+    ]);
+    expect(nextFrame).toBe('timeout');
+  });
+
+  it('policy-closes an authenticated socket when the device is unpaired (1008 UNPAIRED)', async () => {
+    const binding = { deviceId: DEVICE_ID, userId: USER_ID };
+    const { server, address } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: true }),
+      verifyAttestation: async () => ({
+        ok: true,
+        deviceId: DEVICE_ID,
+        userId: USER_ID,
+        expiresAt: new Date(),
+      }),
+    });
+
+    const client = await connect(address.port);
+    helloMessageSchema.parse(await client.next());
+    challengeMessageSchema.parse(await client.next());
+    client.socket.send(
+      JSON.stringify({ v: 1, id: 'd-auth', type: 'auth', attestation: 'x'.repeat(40) }),
+    );
+    expect(authOkMessageSchema.parse(await client.next())).toMatchObject({
+      deviceId: DEVICE_ID,
+      userId: USER_ID,
+    });
+
+    // `revoked` from the cloud: the frozen local protocol has no "unpaired" frame, so the honest
+    // signal is a policy close — the dashboard resets its handshake and reconnects unpaired.
+    server.notifyUnpaired();
+    await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'UNPAIRED' });
+  });
+
+  it('also closes a still-unauthenticated socket on unpair', async () => {
+    const binding: { deviceId: string; userId: string } | null = null;
+    const { server, address } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: binding !== null }),
+    });
+
+    const client = await connect(address.port);
+    expect(helloMessageSchema.parse(await client.next()).paired).toBe(false);
+
+    server.notifyUnpaired();
+    await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'UNPAIRED' });
   });
 });

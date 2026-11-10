@@ -33,6 +33,18 @@ interface ConsentStatusView {
   revocable: boolean;
 }
 
+/** DEC-021/T-064 heads-up: shown while a scheduled run can still be cancelled. */
+interface PendingScheduleView {
+  runId: string;
+  scheduleId: string;
+  durationMin: number;
+  startsAt: string;
+  remaining: string;
+  remainingLine: string;
+  clock: string;
+  cancelLabel: string;
+}
+
 interface ViewState {
   agentVersion: string;
   os: 'macOS' | 'windows' | 'linux';
@@ -47,6 +59,7 @@ interface ViewState {
   accountEmail?: string | null;
   links?: LinksView;
   consent?: ConsentStatusView;
+  pendingSchedule?: PendingScheduleView | null;
 }
 
 interface EndFocusResult {
@@ -54,9 +67,16 @@ interface EndFocusResult {
   message?: string;
 }
 
+interface CancelScheduleResult {
+  ok: boolean;
+  outcome: 'CANCELLED' | 'NOTHING_PENDING';
+  message?: string;
+}
+
 interface FocusAgentBridge {
   getState(): Promise<ViewState>;
   endFocus(): Promise<EndFocusResult>;
+  cancelSchedule(): Promise<CancelScheduleResult>;
   quit(): Promise<{ ok: boolean }>;
   showConsentStatus(): Promise<ConsentStatusView>;
 }
@@ -88,6 +108,10 @@ const START_FROM_DASHBOARD_HINT = 'Start a focus session from the dashboard on t
 const START_AT_LOGIN_NOTE =
   'Focus Mode never starts itself. Turn on Start at login in the tray menu only if you want the ' +
   'Focus Agent available after login. You can switch it off any time.';
+// DEC-021/T-064 heads-up copy (mirrors SCHEDULE_* in view-state.ts).
+const SCHEDULE_CANCEL_LABEL = 'Cancel scheduled session';
+const SCHEDULE_CANCEL_HINT =
+  'You can also cancel from the Focus Agent tray menu until the countdown reaches zero.';
 
 const PROTECTED_PREVIEW_LIMIT = 6;
 
@@ -157,6 +181,11 @@ const focusCountdown = byId('focus-countdown');
 const focusEnds = byId('focus-ends');
 const focusSource = byId('focus-source');
 const focusAllowList = byId('focus-allowlist');
+const scheduleSection = byId('schedule-section');
+const scheduleLine = byId('schedule-line');
+const scheduleCountdown = byId('schedule-countdown');
+const scheduleHint = byId('schedule-hint');
+const scheduleCancelButton = byId('schedule-cancel') as HTMLButtonElement;
 const alertSection = byId('alert-section');
 const alertList = byId('alert-list');
 const allowListSummary = byId('allowlist-summary');
@@ -266,6 +295,34 @@ function renderFocus(state: ViewState): void {
   focusSource.textContent =
     state.session.source === 'SCHEDULE' ? 'Started by a schedule' : 'Started from the dashboard';
   focusAllowList.textContent = appCountLine(state.allowList.length);
+}
+
+/** Live countdown of the heads-up window (derived from the absolute `startsAt`). */
+function renderScheduleCountdown(): void {
+  const pending = current?.pendingSchedule ?? null;
+  if (pending === null) return;
+  const countdown = formatCountdown(pending.startsAt);
+  scheduleCountdown.textContent = countdown.expired
+    ? `Starting now — ${pending.durationMin} min session`
+    : `Starts in ${countdown.text} — ${pending.durationMin} min session`;
+}
+
+/** DEC-021/T-064: the cancellable heads-up. Visible until the run starts or is cancelled. */
+function renderSchedule(state: ViewState): void {
+  const pending = state.pendingSchedule ?? null;
+  scheduleSection.hidden = pending === null;
+  if (pending === null) {
+    scheduleLine.textContent = '';
+    scheduleCountdown.textContent = '';
+    return;
+  }
+
+  renderScheduleCountdown();
+  scheduleLine.textContent =
+    `A scheduled focus session is about to start on this computer. ` +
+    `Cancel it now if this is not a good time — cancelling starts nothing and moves no windows.`;
+  scheduleHint.textContent = SCHEDULE_CANCEL_HINT;
+  scheduleCancelButton.textContent = SCHEDULE_CANCEL_LABEL;
 }
 
 function renderAlerts(state: ViewState): void {
@@ -383,6 +440,7 @@ function render(state: ViewState): void {
   dashboardHint.textContent = phase === 'PAIRED' ? START_FROM_DASHBOARD_HINT : '';
   renderPairing(state);
   renderFocus(state);
+  renderSchedule(state);
   renderAlerts(state);
   renderAllowList(state);
   // Prefer the freshly polled state; the one-shot bridge read is only a fallback.
@@ -437,6 +495,29 @@ endFocusButton.addEventListener('click', () => {
     });
 });
 
+// DEC-021/T-064: cancelling the heads-up must be one click and must never start anything.
+scheduleCancelButton.addEventListener('click', () => {
+  if (bridge === undefined) return;
+  scheduleCancelButton.disabled = true;
+  showActionError(null);
+  void bridge
+    .cancelSchedule()
+    .then((result) => {
+      if (result.outcome === 'NOTHING_PENDING') {
+        showActionError('That scheduled session is no longer waiting — nothing was cancelled.');
+      }
+      return refresh();
+    })
+    .catch((error: unknown) => {
+      showActionError(
+        error instanceof Error ? error.message : 'Could not cancel the scheduled session.',
+      );
+    })
+    .finally(() => {
+      scheduleCancelButton.disabled = false;
+    });
+});
+
 quitButton.addEventListener('click', () => {
   if (bridge === undefined) return;
   quitButton.disabled = true;
@@ -449,4 +530,7 @@ void refresh();
 setInterval(() => {
   void refresh();
 }, 2_000);
-setInterval(renderCountdown, 1_000);
+setInterval(() => {
+  renderCountdown();
+  renderScheduleCountdown();
+}, 1_000);

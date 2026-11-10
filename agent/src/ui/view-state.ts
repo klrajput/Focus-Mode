@@ -16,11 +16,13 @@ import type {
 /**
  * IPC channels the preload may invoke. `preload.cts` mirrors these literals because a sandboxed
  * CommonJS preload cannot import this ESM module at runtime; a test asserts they stay in sync.
- * The consent *read* is derived from `getState`, so it costs no extra channel (REC-004).
+ * The consent *read* is derived from `getState`, so it costs no extra channel (REC-004);
+ * `cancelSchedule` is the user's cancel for the scheduled-session heads-up (DEC-021, T-064).
  */
 export const AGENT_IPC_CHANNELS = Object.freeze({
   getState: 'agent:get-state',
   endFocus: 'agent:end-focus',
+  cancelSchedule: 'agent:cancel-schedule',
   quit: 'agent:quit',
 } as const);
 
@@ -71,10 +73,23 @@ export interface AgentViewState {
   readonly accountEmail?: string | null;
   readonly links?: AgentLinksView;
   readonly consent?: ConsentStatusView;
+  /**
+   * DEC-021/T-064: the scheduled run inside its cancellable ≥10 s heads-up, or null/absent when
+   * there is none. Exposing it here makes the heads-up visible and assertable (E2E reads
+   * `window.focusAgent.getState()`), so a scheduled start can never be invisible to the user.
+   */
+  readonly pendingSchedule?: PendingScheduleInput | null;
 }
 
 export interface EndFocusResult {
   readonly ok: boolean;
+  readonly message?: string;
+}
+
+export interface CancelScheduleResult {
+  /** True when a pending run was actually cancelled (a no-op cancel reports false). */
+  readonly ok: boolean;
+  readonly outcome: 'CANCELLED' | 'NOTHING_PENDING';
   readonly message?: string;
 }
 
@@ -122,6 +137,18 @@ export const PROTECTED_EXPLANATION = 'Protected apps can never be removed or mov
 
 export const START_FROM_DASHBOARD_HINT =
   'Start a focus session from the dashboard on this computer.';
+
+/** DEC-021/T-064: the scheduled-session heads-up copy (FR-012 — always cancellable). */
+export const SCHEDULE_HEADSUP_TITLE = 'Scheduled focus session';
+
+export const SCHEDULE_HEADSUP_BODY =
+  'A scheduled focus session is about to start on this computer. Cancel it now if this is not a ' +
+  'good time — cancelling starts nothing and moves no windows.';
+
+export const SCHEDULE_CANCEL_LABEL = 'Cancel scheduled session';
+
+export const SCHEDULE_CANCEL_HINT =
+  'You can also cancel from the Focus Agent tray menu until the countdown reaches zero.';
 
 // ---------------------------------------------------------------------------
 // Pure formatting helpers
@@ -318,12 +345,60 @@ export interface LinksView {
   readonly dashboardLine: string;
 }
 
+/**
+ * DEC-021/T-064 heads-up model. Built from the schedule flow's pending run and the current
+ * clock, so the countdown is derived from the absolute `startsAt` (never a decremented local
+ * timer, same rule as the focus countdown).
+ */
+export interface PendingScheduleView {
+  readonly runId: string;
+  readonly scheduleId: string;
+  readonly durationMin: number;
+  /** Absolute ISO start time carried by the flow (announce time + heads-up window). */
+  readonly startsAt: string;
+  /** `mm:ss` left in the cancellable window. */
+  readonly remaining: string;
+  readonly remainingLine: string;
+  readonly clock: string;
+  readonly cancelLabel: string;
+}
+
+/** Minimal shape the view model needs; structurally satisfied by the schedule flow's run. */
+export interface PendingScheduleInput {
+  readonly runId: string;
+  readonly scheduleId: string;
+  readonly durationMin: number;
+  readonly startsAt: string;
+}
+
+/** Builds the heads-up view model; an absolute `startsAt` keeps it honest across sleep/wake. */
+export function buildPendingScheduleView(
+  pending: PendingScheduleInput,
+  now: Date = new Date(),
+): PendingScheduleView {
+  const countdown = formatCountdown(pending.startsAt, now);
+  return {
+    runId: pending.runId,
+    scheduleId: pending.scheduleId,
+    durationMin: pending.durationMin,
+    startsAt: pending.startsAt,
+    remaining: countdown.text,
+    remainingLine: countdown.expired
+      ? `Starting now — ${pending.durationMin} min session`
+      : `Starts in ${countdown.text} — ${pending.durationMin} min session`,
+    clock: countdown.clock,
+    cancelLabel: SCHEDULE_CANCEL_LABEL,
+  };
+}
+
 export interface AgentWindowView {
   readonly phase: AgentWindowPhase;
   readonly headline: string;
   readonly links: LinksView;
   readonly pairing: PairingView | null;
   readonly focus: FocusView | null;
+  /** DEC-021: non-null only while a scheduled run is in its cancellable heads-up. */
+  readonly pendingSchedule: PendingScheduleView | null;
   readonly allowList: AllowListView;
   readonly consent: ConsentLine;
   readonly alerts: readonly AgentAlert[];
@@ -468,6 +543,10 @@ export function buildAgentWindowView(
     links: buildLinksView(state.links),
     pairing: phase === 'UNPAIRED' && canShowPairing(state) ? buildPairingView(state, now) : null,
     focus,
+    pendingSchedule:
+      state.pendingSchedule === undefined || state.pendingSchedule === null
+        ? null
+        : buildPendingScheduleView(state.pendingSchedule, now),
     allowList: buildAllowListView(state.protected, state.allowList),
     consent: describeConsent(state.consent),
     alerts: buildAlerts(state),
