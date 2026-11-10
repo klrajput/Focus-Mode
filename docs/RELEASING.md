@@ -330,3 +330,98 @@ allowlist), never `--force` in CI.
   in the commit and, when it affects users (e.g. appId changes userData path), log an ADR in
   `docs/DECISIONS.md`.
 - The `publish` block must stay `releaseType: draft`; auto-publishing on tag push is not allowed.
+
+---
+
+## 11. Security of artifacts (Electron fuses + asar contents)
+
+Two independent defences are enforced on every packaged Focus Agent (SEC-8, task T-080/T-113):
+
+### 11.1 Electron fuses
+
+The `afterPack` hook in `agent/electron-builder.yml` calls `agent/build/flip-fuses.mjs` **after
+packaging and before signing**. electron-builder imports that module and calls its exported
+`afterPack(context)` (it does *not* spawn `node … <dir>`); the same file also supports manual CLI use:
+`node agent/build/flip-fuses.mjs <appOutDir>`.
+
+| Fuse | Required state | Why |
+|---|---|---|
+| `RunAsNode` | **Disabled** | `ELECTRON_RUN_AS_NODE` cannot turn the shipped app into a plain Node interpreter (arbitrary code execution gadget). |
+| `EnableNodeOptionsEnvironmentVariable` | **Disabled** | `NODE_OPTIONS` injection into the packaged app is refused. |
+| `EnableNodeCliInspectArguments` | **Disabled** | `--inspect`/`--inspect-brk` cannot attach a debugger to the packaged app. |
+| `OnlyLoadAppFromAsar` | **Enabled** | Electron loads the app only from `app.asar` (no `app/` directory or next-to-asar shadowing). |
+| `EnableEmbeddedAsarIntegrityValidation` | **Enabled** (macOS only — Electron does not implement it elsewhere) | asar Integrity is validated at launch. |
+| `GrantFileProtocolExtraPrivileges` | **Disabled** | `file://` renders without extra privileges. |
+| `EnableCookieEncryption` | **Enabled** | any accidental cookie store is OS-encrypted (the agent renderer has no cookies). |
+
+The hook is **self-verifying**: it reads the fuse wire before and after the flip and fails the build if
+the final state is not exactly the table above. On Apple Silicon the hook passes
+`resetAdHocDarwinSignature: true`, so the unsigned arm64 build still launches after the binary is
+modified.
+
+Real before/after evidence (macOS arm64):
+
+```
+# Released artifact from release run 42858934575 (built BEFORE the hook existed) — insecure defaults:
+  RunAsNode is Enabled
+  EnableNodeOptionsEnvironmentVariable is Enabled
+  EnableNodeCliInspectArguments is Enabled
+  EnableEmbeddedAsarIntegrityValidation is Disabled
+  OnlyLoadAppFromAsar is Disabled
+
+# Same app after a local `electron-builder --mac --dir` build with the hook:
+  RunAsNode is Disabled
+  EnableCookieEncryption is Enabled
+  EnableNodeOptionsEnvironmentVariable is Disabled
+  EnableNodeCliInspectArguments is Disabled
+  EnableEmbeddedAsarIntegrityValidation is Enabled
+  OnlyLoadAppFromAsar is Enabled
+  GrantFileProtocolExtraPrivileges is Disabled
+```
+
+CI gate: the release build job runs **“Verify Electron fuses (macOS/Windows)”** (`if: runner.os !=
+'Linux'`) which executes `node_modules/.bin/electron-fuses read --app <packaged app>` and fails unless
+`RunAsNode` / `EnableNodeOptionsEnvironmentVariable` / `EnableNodeCliInspectArguments` are Disabled,
+`OnlyLoadAppFromAsar` is Enabled, `GrantFileProtocolExtraPrivileges` is Disabled, and (macOS)
+`EnableEmbeddedAsarIntegrityValidation` is Enabled.
+
+**Linux caveat:** the AppImage/deb payload has no standalone `.app`/`.exe` bundle the fuses CLI can read
+in CI, so the fuses assertion is macOS/Windows only. The hook still runs on `linux-unpacked` before the
+AppImage/deb are produced, and the asar-contents guard below still runs on Linux.
+
+### 11.2 asar contents invariant
+
+The shipped `app.asar` contains **only** our compiled app code + production dependencies. Required
+entries: `/dist/main.js`, `/dist/ui/index.html`, `/dist/ui/preload.cjs`, `/package.json`. Forbidden
+anywhere in the archive: `.env` files, any certificate/private-key material
+(`.pem`, `.key`, `.p12`, `.pfx`, `.cer`, `.mobileprovision`, `.jks`, `.keystore`), our TypeScript
+`src/`, and our own `dist/**/*.map` / test files. Dependency internals (e.g.
+`node_modules/@focus-mode/shared/dist/*.map`, the published payload of a workspace dependency) are
+expected and allowed — they are not secrets and not our sources.
+
+CI gate: **“Verify packaged app.asar contents (no secrets/certs/sources)”** runs on every OS in the
+release build job, lists the archive with `@electron/asar` and fails on a missing required entry or a
+forbidden one.
+
+### 11.3 Verify locally
+
+```sh
+# 1. package the app (fuses are flipped by afterPack; the hook prints before/after)
+cd agent && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir --publish never
+# 2. read the fuse wire independently
+npx @electron/fuses read --app "release/mac-arm64/Focus Mode Agent.app"
+# 3. manual re-flip / self-verification (idempotent, prints PASS)
+node build/flip-fuses.mjs release/mac-arm64
+# 4. asar listing
+npx @electron/asar list "release/mac-arm64/Focus Mode Agent.app/Contents/Resources/app.asar"
+```
+
+**Unsigned-build caveat:** fuses harden the runtime, they are **not** a substitute for code signing.
+Unsigned artifacts are still subject to SmartScreen / Gatekeeper warnings (§6) and unsigned arm64
+macOS builds stay un-notarised. **Secrets:** the fuse verification steps need **no** signing secrets;
+certificates are only ever provided through the optional secret-gated env (§5) and must never be
+committed or placed under `agent/build/`.
+
+If a fuse/asar assertion fails in CI, the build is red and must not be released. Do **not** silently
+weaken the fuse set: get A0 approval, record the deviation in `docs/KNOWN_ISSUES.md` (severity + reason)
+and update this section in the same change.

@@ -127,6 +127,85 @@ jobs:
         shell: bash
         run: ls -l release
 
+      # Zero-trust packaging checks (W6/T-080): the `afterPack` hook in agent/electron-builder.yml
+      # flips Electron fuses, and the files/asar config keeps secrets and sources out of app.asar.
+      # These steps prove both on the artifact that is about to be uploaded — a build with insecure
+      # defaults (RunAsNode / NODE_OPTIONS / --inspect enabled, app not loaded only from asar) or
+      # with a shipped .env/.pem/.key fails here instead of reaching a release.
+      - name: Verify Electron fuses (macOS/Windows)
+        # Linux has no Electron-fuse equivalent inside AppImage/deb: the read tool is not supported
+        # for those payloads, so Linux installations rely on the asar-content guard below plus the
+        # documented caveat in docs/RELEASING.md §11 (fuses are still flipped before packaging).
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FUSES="$GITHUB_WORKSPACE/node_modules/.bin/electron-fuses"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            APP=$(find agent/release -maxdepth 2 -name '*.app' -type d | head -n 1)
+          else
+            APP=$(find agent/release/win-unpacked -maxdepth 1 -name '*.exe' \
+              ! -name 'elevate.exe' ! -name 'crashpad_handler.exe' ! -name 'notification_helper.exe' | head -n 1)
+          fi
+          if [ -z "${APP:-}" ]; then
+            echo "FAIL: no packaged app found for fuse inspection"
+            exit 1
+          fi
+          echo "reading fuses from: $APP"
+          FUSE_OUTPUT=$("$FUSES" read --app "$APP" 2>&1)
+          echo "$FUSE_OUTPUT"
+          for expected in \
+            "RunAsNode is Disabled" \
+            "EnableNodeOptionsEnvironmentVariable is Disabled" \
+            "EnableNodeCliInspectArguments is Disabled" \
+            "OnlyLoadAppFromAsar is Enabled" \
+            "GrantFileProtocolExtraPrivileges is Disabled"; do
+            if ! grep -qF "$expected" <<< "$FUSE_OUTPUT"; then
+              echo "FAIL: fuse assertion missing: $expected"
+              exit 1
+            fi
+          done
+          if [ "$RUNNER_OS" = "macOS" ] && ! grep -qF "EnableEmbeddedAsarIntegrityValidation is Enabled" <<< "$FUSE_OUTPUT"; then
+            echo "FAIL: macOS embedded asar-integrity fuse is not enabled"
+            exit 1
+          fi
+          echo "PASS Electron fuses verified ($RUNNER_OS)"
+
+      - name: Verify packaged app.asar contents (no secrets/certs/sources)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASAR_PATH=$(find agent/release -type f -name 'app.asar' | head -n 1)
+          if [ -z "${ASAR_PATH:-}" ]; then
+            echo "FAIL: no app.asar found in agent/release"
+            exit 1
+          fi
+          export ASAR_PATH
+          node - <<'NODE'
+          const asar = require('@electron/asar');
+          const asarPath = process.env.ASAR_PATH;
+          const entries = asar.listPackage(asarPath);
+          const required = ['/dist/main.js', '/dist/ui/index.html', '/dist/ui/preload.cjs', '/package.json'];
+          const missing = required.filter((entry) => !entries.includes(entry));
+          // Secrets/certs must never be packaged, app sources must not leak, and our own compiled
+          // output must not ship source maps or test files. Dependency internals (e.g.
+          // node_modules/@focus-mode/shared/dist/*.map, the published payload of a workspace dep)
+          // are out of scope here and would be caught by the secret pattern if they were secrets.
+          const secretRe = /(^|\/)\.env(\.|$)|\.(pem|key|p12|pfx|cer|mobileprovision|jks|keystore)$/i;
+          const appSourceRe = /^\/src\//;
+          const appMapOrTestRe = /^\/(dist\/.*\.map|.*\.test\.[cm]?[jt]s)$/;
+          const fatal = entries.filter(
+            (entry) => secretRe.test(entry) || appSourceRe.test(entry) || appMapOrTestRe.test(entry),
+          );
+          console.log(`app.asar: ${asarPath}`);
+          console.log(`total entries: ${entries.length}`);
+          console.log(`required present: ${required.length - missing.length}/${required.length}`);
+          if (missing.length) console.log('FAIL missing entries:', missing);
+          if (fatal.length) console.log('FAIL forbidden entries:', fatal.slice(0, 20));
+          if (missing.length || fatal.length) process.exit(1);
+          console.log('PASS app.asar contents verified (dist-only app code, no secrets/certs/sources)');
+          NODE
+
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

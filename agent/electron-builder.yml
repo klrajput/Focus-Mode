@@ -36,6 +36,16 @@ asarUnpack:
 # project, so an Electron-header rebuild would fail — keep the shipped prebuilt binaries.
 npmRebuild: false
 
+# T-080 packaging security: flip the Electron fuses on the packaged binary BEFORE signing.
+# electron-builder imports this module and calls its exported function with an AfterPackContext
+# ({ appOutDir, electronPlatformName, arch, packager, … }) — it is NOT invoked as
+# `node flip-fuses.mjs <appOutDir>`; see the contract note in that file. The hook disables
+# RunAsNode / NODE_OPTIONS / --inspect and forces loading only from app.asar (plus asar-integrity
+# validation on macOS), then re-signs ad-hoc on Apple Silicon so the unsigned build still launches.
+# Also verify in CI (.github/workflows/release.yml "Verify Electron fuses") and locally with
+# `npx @electron/fuses read --app <packaged app>`; docs/RELEASING.md §11.
+afterPack: build/flip-fuses.mjs
+
 # Merged into the app metadata used by the builders. Needed because electron-builder cannot
 # infer the repository from .git/config in this npm-workspaces layout (projectDir is agent/):
 #  * `homepage` is required by the Linux deb target and is used by NSIS uninstall links
