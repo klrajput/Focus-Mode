@@ -184,7 +184,14 @@ jobs:
           node - <<'NODE'
           const asar = require('@electron/asar');
           const asarPath = process.env.ASAR_PATH;
-          const entries = asar.listPackage(asarPath);
+          // @electron/asar's listFiles() builds paths with path.join() from '/', so on Windows the
+          // entries come back as `\dist\main.js` (backslashes, no leading slash) while macOS/Linux
+          // yield `/dist/main.js`. Normalise to POSIX-with-leading-slash before matching, otherwise
+          // the Windows runner reports "required present: 0/4" for a perfectly valid archive
+          // (observed in the W6 dry-run 42870794359).
+          const entries = asar
+            .listPackage(asarPath)
+            .map((entry) => '/' + entry.replace(/\\/g, '/').replace(/^\/+/, ''));
           const required = ['/dist/main.js', '/dist/ui/index.html', '/dist/ui/preload.cjs', '/package.json'];
           const missing = required.filter((entry) => !entries.includes(entry));
           // Secrets/certs must never be packaged, app sources must not leak, and our own compiled
