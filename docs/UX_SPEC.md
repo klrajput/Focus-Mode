@@ -300,14 +300,15 @@ $ node /tmp/ux/wcag-contrast.mjs
 
 | AgentLink state | Icon (lucide) | Text | Fill / label | Extra |
 |---|---|---|---|---|
-| `CONNECTED` / `PAIRED` | `CheckCircle2` | `Connected` | `badge-success-bg` / `#166534` | tooltip "Focus Agent connected: {device}" |
-| `DISCONNECTED` | `CircleSlash2` | `Disconnected` | `badge-neutral-bg` / `#475569` | click → help card §6.3 |
-| `FOCUSING` | `Target` | `Focusing` | `badge-focus-bg` / `#115E59` | tooltip "Focusing — 42:10 remaining" |
-| `CONNECTING` (first 5 s) | `Loader2` (static) | `Connecting…` | neutral | disappears when resolved |
+| `PAIRED` (connected) | `CheckCircle2` | `Connected` | `badge-success-bg` / `#166534` | tooltip `detail`: "Your Focus Agent is connected." |
+| `DISCONNECTED` | `CircleSlash2` | `Disconnected` | `badge-neutral-bg` / `#475569` | click → help card §6.3; tooltip "No Focus Agent is reachable on this computer." |
+| `FOCUSING` | `Target` | `Focusing` | `badge-focus-bg` / `#115E59` | tooltip "Your Focus Agent is running a focus session." |
+| `IDLE` (reachable, unpaired) | `CircleSlash2` | `Not paired` | `badge-neutral-bg` / `#475569` | tooltip "Your Focus Agent is running but not paired to this account." |
+| `CONNECTING` (first seconds) | `Loader2` (static) | `Connecting…` | neutral | disappears when resolved |
 
-`aria-label="Focus Agent status: Connected"`, `aria-live="polite"` on the label. User-facing copy always says **Focus Agent**, never bare "agent" (AGENTS.md §0).
+`aria-label="Focus Agent status: Connected"`, `aria-live="polite"` on the label. User-facing copy always says **Focus Agent**, never bare "agent" (AGENTS.md §0). Tooltip text is the provider's user-safe `detail` sentence, **not** a templated device name — before attestation the dashboard does not know which paired device the loopback agent maps to, so inventing a device name would be dishonest (ratified in the W1/W2 review, §12.4 D2).
 
-**`FocusIndicator`** — persistent on every authenticated route **and** `/403` + `/404`; not on `/`, `/login`, `/signup`. Bottom-fixed bar < 768, sticky top bar ≥ 768. Shows teal mark + "Focusing" + remaining minutes (from agent `endsAt`) + `End Focus` (always enabled). No animation, no live region (the badge already announces).
+**`FocusIndicator`** — persistent on every authenticated route **and** `/403`; not on `/`, `/login`, `/signup`, and not on the standalone `/404` (the catch-all must also serve signed-out visitors, so it is deliberately outside the AppShell — ratified §12.4 D4). Sticky top bar at every width (bottom-fixed on mobile was dropped in W2 so the bar can never cover the End Focus dialog footer; ratified D6). Shows teal mark + "Focusing" + remaining minutes (from agent `endsAt`) + `End Focus` (always enabled). No animation, no live region (the badge already announces). If the link drops mid-session the bar must keep a warning state rather than vanishing — see fix F-02 (§12.5).
 
 ---
 
@@ -480,8 +481,11 @@ Pair dialog (440 px, modal)              Unpair confirm (400 px)
 ```
 **loading** table skeleton · **empty** "No users match your filters." / "No presets yet. Create the first one." · **error** retry card; mutation toasts for `FORBIDDEN`/`CONFLICT`/`INTERNAL` · **success** "User deactivated" / "Preset published" / "Download link updated". No UI affordance for per-user sessions (PDF §6 non-invasive).
 ### 4.11 `/403` and `/404`
+
+`/403` renders inside the AppShell (badge + focus slot visible). `/404` is deliberately standalone (no AppShell, no FocusIndicator): the catch-all must also work for signed-out visitors, and bouncing a bad link to `/login` would be worse (ratified §12.4 D4 — this replaces the earlier "inside AppShell" wording).
+
 ```
-/403 (inside AppShell)                    /404
+/403 (inside AppShell)                    /404 (standalone, public)
 ┌────────────────────────────────────┐   ┌───────────────────────────────────┐
 │  ⛔ 403 — You don't have access    │   │ 404 — We couldn't find that page   │
 │  This page is for administrators.  │   │ The link may be wrong or the page  │
@@ -490,7 +494,7 @@ Pair dialog (440 px, modal)              Unpair confirm (400 px)
 │  [ Back to dashboard ] [ Sign out ]│   └───────────────────────────────────┘
 └────────────────────────────────────┘
 ```
-**loading / empty / success** n/a (rendered synchronously by `RequireRole` / catch-all `*`; FocusIndicator still visible when focusing) · **error** these *are* the error pages; also used for API `FORBIDDEN` navigations.
+**loading / empty / success** n/a (rendered synchronously by `RequireRole` / catch-all `*`) · **error** these *are* the error pages; also used for API `FORBIDDEN` navigations.
 
 ---
 
@@ -588,6 +592,7 @@ Copy rules: sentence case; second person; no exclamation marks; no "Oops"; never
 |---|---|---|---|---|
 | `VALIDATION_ERROR` | 400 | inline fields + summary | "Check the highlighted fields and try again." | map `details[]` to fields |
 | `UNAUTHENTICATED` | 401 | toast + redirect | "Your session has expired. Please log in again." | clear token → `/login` |
+| `UNAUTHENTICATED` (login form only) | 401 | banner on `/login` | "Email or password is incorrect." | keep the form, do not redirect (ratified §12.4 D1) |
 | `FORBIDDEN` | 403 | toast or `/403` | "You don't have permission to do that." | stay / `403` page |
 | `NOT_FOUND` | 404 | toast / inline | "We couldn't find that. It may have been removed." | refresh list |
 | `CONFLICT` | 409 | toast / inline | "That action conflicts with something already in progress. Refresh and try again." | refresh |
@@ -600,18 +605,20 @@ Copy rules: sentence case; second person; no exclamation marks; no "Oops"; never
 | `ACCOUNT_DISABLED` | 403 | login banner | "This account has been disabled. Contact an admin if you think this is a mistake." | no retry |
 | `INTERNAL` | 500 | toast / `ErrorState` | "Something went wrong on our side. Please try again." | Retry |
 
-Local-channel `focusRejected` codes reuse this shape; these four strings go in `AgentLink` error handling:
+Local-channel `focusRejected` codes reuse this shape; these six strings go in `AgentLink` error handling (ratified §12.4 D5 — `UNSUPPORTED` deliberately drops the `{reason}` slot: the agent-supplied text is a support detail, never the primary user message):
 
 | Local code | Message |
 |---|---|
+| `ALREADY_FOCUSING` | same string as the API row above |
+| `UNAUTHENTICATED` | "Your Focus Agent needs to be verified again. Pair it on Devices." |
 | `NOT_PAIRED` | "Your Focus Agent isn't paired to this account yet. Pair it on Devices." |
 | `CONSENT_REQUIRED` | "Confirm the first-run permission in the Focus Agent window, then try again." |
-| `UNSUPPORTED` | "Your Focus Agent can't move windows on this system ({reason}). Focus needs Windows, macOS, or Linux with X11." |
+| `UNSUPPORTED` | "Your Focus Agent can't move windows on this system. Focus needs Windows, macOS, or Linux with X11." |
 | `INVALID` | "The Focus Agent rejected that request. Try again — if it keeps happening, restart the Focus Agent." |
 
 ### 6.3 Local-network help card (S-4 / T-045) — "Can't reach your Focus Agent"
 
-Shown in the badge popover, `/devices`, and the FocusIndicator when the WS connect fails.
+Shown as a dismissible full-width card at the top of `<main>` on every authenticated route after a failed local-link connect, and opened by clicking the `Disconnected` badge (W2 implementation; the original "badge popover" idea was replaced by this simpler always-visible placement — ratified §12.4 D3).
 
 ```
 Title: Allow this site to reach your Focus Agent
@@ -629,10 +636,10 @@ By browser:
                  your Focus Agent.
 
 Still not connecting?
-  1. Is the Focus Agent running? Its tray icon should be visible.
+  1. Start your Focus Agent and leave it running — its tray icon should be visible.
   2. Does the agent window show a pairing code or "Paired"?
   3. Reload this page. If it still fails, restart the Focus Agent.
-Buttons: [ Reload page ]   [ Open download page ]
+Buttons: [ Reload page ]   [ Open download page ]      Dismiss: [ Dismiss ]
 ```
 
 Safari variant: replace the by-browser block with one warning card — "**Your browser can't connect to the Focus Agent.** Safari can't open a local WebSocket from an HTTPS page. Use Chrome, Edge or Firefox for the dashboard." No silent failure, no retry loop.
@@ -710,7 +717,7 @@ Breakpoints: base 360–639 · `sm` 640 · `md` 768 · `lg` 1024 · `xl` 1280 ·
 | Element | 360 px | 768 px | 1440 px |
 |---|---|---|---|
 | AppShell nav | top bar: ☰ → slide-over Sheet + title + badge | Sheet from left | persistent 248 px sidebar |
-| FocusIndicator | fixed bottom bar (2 lines), End Focus full-width beside time | sticky top bar | sticky top bar, single line |
+| FocusIndicator | sticky top bar, wraps to 2 lines if needed (bottom bar dropped — ratified §12.4 D6) | sticky top bar | sticky top bar, single line |
 | Dashboard grid | 1 column | 2 columns (Start \| Today) | 12-col: Start 7 / Today 5, sessions full |
 | Tables | rows become cards (`<dl>` per field) | 2–3 columns | full table, sticky head |
 | Dialogs / consent | full-screen sheet, sticky 44 px footer | centred 440 px | centred 440–560 px |
@@ -747,8 +754,103 @@ Also: `min-w-0` on flex/grid children; long values `truncate` + `title`; no `whi
 
 ## 11. Open questions for A4 / A0 (max 5)
 
-1. **Font** — spec defaults to the system UI stack (no network font, strict CSP). If A4 wants Inter, self-host via `@fontsource/inter` (dependency decision for A0). *Recommendation: system stack for v1.*
-2. **Notifications bell (FR-025)** — AppShell header from W4 or added in W5? *Recommendation: reserve the slot now (empty bell + count), implement in W5.*
-3. **FocusIndicator on public routes** — FR-009 says "every route"; this spec shows it on authenticated routes + `/403`/`/404` only. *Recommendation: keep it off `/`, `/login`, `/signup`; confirm with A0/A1.*
-4. **`StartFocusCard` when no agent** — disabled button + inline reason + §6.4 card, or enabled and click opens the card? *Recommendation: disabled + reason + card (no dead-end click).*
-5. **`/settings` scope** — acceptable to omit account deletion and the start-at-login toggle from the dashboard (agent-owned, REC-008) in v1? *Recommendation: yes; document in README limitations.*
+> All five were answered during the W1/W2 review (§12.4); kept here as the decision trail.
+
+1. **Font** — *Resolved:* system UI stack is implemented (`index.css`), no network font, CSP-safe. Inter is not a v1 dependency.
+2. **Notifications bell (FR-025)** — *Resolved (DEC-012 Q2):* no bell in W1/W2; reserved for W5, no fake count rendered.
+3. **FocusIndicator on public routes** — *Resolved (DEC-012 Q3, §12.4 D4):* authenticated routes + `/403` only; standalone `/404` shows no indicator.
+4. **`StartFocusCard` when no agent** — *Resolved:* disabled button + inline reason (`aria-describedby`) + §6.4 card. The current W1 reason copy is stale and must be replaced (F-01/F-03).
+5. **`/settings` scope** — *Resolved:* no account deletion in v1; start-at-login stays in the Focus Agent tray (REC-008). Unpair-all/password change remain P0 for T-072 (Phase 5).
+
+---
+
+## 12. Implementation review — W1/W2 (A3)
+
+> **Task:** W2 UX review requested by A0 (branch `feat/a3-ux-review`) · **Method:** read-only review of the merged `client/`; A3 edited **only this document**.
+> **Evidence:** every file cited below was opened in this review; `npm test --workspace=@focus-mode/client` → **11 files / 42 tests passed** (1.56 s). No client code was changed by A3. Snapshot: the W1/W2-merged working tree; the `e2e/` suite (A8/A9) landed during the review and is covered in rows 14/21.
+> **Result vocabulary:** **PASS** = implemented as specified · **DRIFT** = differs from this spec (action or ratification listed) · **DEFERRED** = deliberately outside W1/W2 scope per IMPLEMENTATION_PLAN, not a defect (owning task named). A PASS is a *spec-conformance* judgement, never a claim that a feature works at runtime.
+
+### 12.1 Checklist
+
+| # | Area | Spec ref | Result | Note / evidence |
+|---|---|---|---|---|
+| 1 | Colour tokens (`client/src/index.css` `@theme`, 10–82) | §1.2, §1.4 | **PASS** | 45/45 `--color-*` tokens present with values identical to the spec (case-insensitive compare); 0 missing, 0 extra, 0 mismatches. |
+| 2 | Non-colour tokens (`client/src/styles/tokens.css` 9–61) | §1.3 | **PASS** | Every `--fm-*` token present and equal; reduced-motion collapse included; no hex added here. |
+| 3 | Colour discipline / contrast intent | §1.5, §2.2 | **PASS** | `grep '#[0-9A-Fa-f]{6}' client/src/**/*.tsx` → 0 hits; every fill/text combination maps to an audited §2 pair (primary/danger/focus-strong + white, `danger-text`, `amber-text`, `border-strong`, disabled pair). Only note: raw `danger #DC2626` is used as the *icon* colour on `bg-danger-subtle` (4.41:1) in `error-state.tsx:38` and `forbidden.tsx:30` — legal at ≥3:1 for a graphic, must never become text. |
+| 4 | `AgentStatusBadge` (`components/agent/agent-status-badge.tsx`) | §3, §10.1 | **PASS** | Icon + text, `role="status"`, `aria-live="polite"`, `aria-label`, `Disconnected` opens the help card. Ratified additions: `IDLE → "Not paired"` and the `detail` sentence tooltip (D2). |
+| 5 | `FocusIndicator` (`components/agent/focus-indicator.tsx`) | §3, §4.4 | **PASS** | Renders only when `status==='FOCUSING' && session!==null`; countdown derived from `endsAt`; 1 s discrete update with no transition; icon + text; real `exitFocus` on End Focus; visible on every AppShell route incl. `/403`. Known gap: no "Lost contact" warning if the link drops mid-session (F-02). |
+| 6 | Provider auth gating (`agent/agent-link-provider.tsx` 305–346) | §3 / DEC-012 Q3 | **PASS** | Socket opens only when `authStatus === 'authenticated'`; disposed + state reset on logout; status vocabulary from `@focus-mode/shared`; `connectFailed` sets `helpCardVisible`. |
+| 7 | `AgentHelpCard` (`components/agent/agent-help-card.tsx`) | §6.3 | **PASS** (1 copy note) | Title, body, Chrome/Edge, Firefox, Safari, "Still not connecting?" 2–3 and both buttons verbatim. Step 1 wording differs — ratified to the implementation (D3); `Dismiss` + full-width placement ratified (D3). |
+| 8 | `/devices` page (`pages/devices.tsx`) | §4.5, §6.1 | **PASS** | All four states; empty title and error title verbatim; 5 s background refetch; capability line shown honestly. Deferred: `Download Focus Agent` action and the "allow-list v3" line from the wireframe (F-07, T-072). |
+| 9 | Pair dialog (`components/devices/pair-dialog.tsx`) | §4.5, §6.2 | **PASS** | Title/description/hint exact; digits-only, max 6, autofocus; submit disabled until 6 digits; "Pairing…" loading; `INVALID_PAIRING_CODE`/`PAIRING_EXPIRED`/`VALIDATION_ERROR` surface as field errors (ratified interpretation of the wireframe's error slot); toast "Agent connected" exact. |
+| 10 | Unpair dialog (`components/devices/unpair-dialog.tsx`) | §4.5 | **PASS** | Title and confirmation sentence exact; destructive confirm; toast "Device unpaired"; extra explanatory sentence approved. |
+| 11 | `/login` (`pages/login.tsx`) | §4.2, §6.2 | **PASS** | "Welcome back"/"Log in"/"Logging in…"/"New here? Sign up →"; `details[]` → inline fields; 401/403/409/429 mapped; 60 s rate-limit countdown; "Signed in" + redirect to the attempted route. 401 copy ratified (D1). |
+| 12 | `/signup` (`pages/signup.tsx`) | §4.2 | **PASS** | "Create your account"/"Creating account…"/"Already have an account? Log in →"; 409 copy exact; success → `/dashboard?welcome=1`; password hint wording ratified (D7). |
+| 13 | NFR-007 states on data screens | §4.x, §6.1 | **PASS** except `/focus` | Dashboard, devices, allow-list, schedules, insights, settings, admin each render loading (static skeleton + `sr-only` label), empty, error (`role="alert"` + Retry, code as muted ref) and success. `/focus` renders only the empty state even while a real session is running (F-02). Static pages correctly render no states. |
+| 14 | NFR-006 at 360 px (static inspection) | §8 | **PASS** (provisional) | No viewport-scale fixed widths; `flex-wrap` + `min-w-0` + `truncate` throughout; drawer nav with focus trap < 1024; primary controls 44 px below `md` (the `sm` variant is 40 px mobile / 36 px desktop → F-06). One deviation: the insights daily table scrolls inside its own `overflow-x-auto` instead of becoming card rows (F-05). The `e2e/` suite (A8/A9: `smoke.spec.ts`, `pairing.spec.ts`) has **no viewport/scrollWidth test yet**, so the §8 assertion is unproven until T-085 — PASS here is static only. |
+| 15 | Motion | §9 | **PASS** | Static skeletons/spinner (no shimmer), no infinite animation, durations/easing from tokens, reduced-motion collapse in `tokens.css`. |
+| 16 | Accessibility (W2 subset) | §10 | **PASS** with notes | Skip link, 2 px focus rings with offsets, dialog focus trap + return focus + Escape, `label`/`aria-invalid`/`aria-describedby`, error toasts with `duration: Infinity`. Note: the badge wrapper carries `aria-label` *and* live child text, which can double-announce (F-08, T-084). Countdown-ring rules (§10.4) have no implementation yet. |
+| 17 | Role-aware nav + guards | §3, §4.10 | **PASS** | USER sees 7 items; ADMIN also sees `Admin`; `RequireRole` sends USER to `/403` inside the shell; react-query/API still enforce 403 server-side. |
+| 18 | W3+ scope | §4.3–§4.10 | **DEFERRED** | Not built (correctly, with no fake values): dashboard Today card/consent/Start wiring, `/focus` session UI, allow-list editor + presets, schedules CRUD, settings edit/password/unpair-all, admin tabs/search/actions/stats, landing download links + nav anchors, Recharts, notification bell, Focus Agent window/tray. |
+| 19 | Copy discipline | §6.1 | **DRIFT** | Internal milestone/task jargon is rendered to users on 8 routes → **C-01**; insights error exposes an implementation rationale → **C-02**. Must be fixed before the W3 demo. |
+| 20 | Client tests | — | **PASS** | 42/42 green; they assert badge labels (incl. "Not paired"), End Focus wiring, devices empty/error copy and login flows. None assert the jargon strings, so C-01 removal causes no test churn. |
+| 21 | E2E (A8/A9) | §4.5, §6.1 | **PASS** (coverage noted) | `e2e/pairing.spec.ts` + `e2e/smoke.spec.ts` exist and assert the accessible names `Focus Agent status: Connected`, dialog names, and the exact strings "Agent connected", "Device unpaired", "No device connected — start your Focus Agent". C-01 replacements must (and do) leave those strings untouched; F-08 must keep the `Focus Agent status: …` accessible name stable. |
+
+### 12.2 Copy regressions / drift
+
+**C-01 (HIGH) — internal development jargon in rendered UI.** Violates §6.1 ("no internal codes, no stack-trace/branch jargon") and is now *stale*: W2 merged the agent link and the pairing dialog, so several sentences are factually wrong. Exact strings (all verified in the files, all user-visible):
+
+| # | File:line | Current rendered string | Replacement |
+|---|---|---|---|
+| 1 | `pages/dashboard.tsx:53-55` | "Starting a session needs the live Focus Agent link — it lands in W2 (T-045). The Focus Agent is what actually moves windows aside, so nothing is started from here yet." | "Connect the Focus Agent to start a session. The Focus Agent moves windows aside — the dashboard never touches your operating system." |
+| 2 | `pages/dashboard.tsx:148-150` | "The download links and the pairing dialog land in W2; this checklist is here so the first-run path is visible, not implied." | Delete (the pairing dialog exists now); keep the 3-step list. |
+| 3 | `pages/allowlist.tsx:105-107` | "Allow-list version {n}. Editing, manual app add and presets land with T-034 (W2) — this view is read-only today." | "Allow-list version {n}. Editing and adding apps aren't available yet." |
+| 4 | `pages/schedules.tsx:33-35` | Badge text "Read-only in W1" | Remove the badge (a phase label is not user copy); keep the list. |
+| 5 | `pages/schedules.tsx:60` | "Creating schedules lands with T-035 (W2). A scheduled session starts only while your Focus Agent is connected, and only after a 10-second heads-up you can cancel." | "A scheduled session starts only while your Focus Agent is connected, and only after a 10-second heads-up you can cancel." |
+| 6 | `pages/schedules.tsx:98-100` | "Creating, editing and enabling schedules land with T-035 (W2) — this list is read-only today." | "Creating and editing schedules aren't available yet." |
+| 7 | `pages/focus.tsx:37` | "The live countdown ring and End Focus land with T-031 / T-045 (W2)." | Delete; the empty-state description already explains the next step. |
+| 8 | `pages/insights.tsx:180-182` | "The Recharts daily-focus chart lands with T-033 (W2). This table is the accessible equivalent of the same data, so no numbers are guessed." | "This table is the accessible view of your daily focus minutes." |
+| 9 | `pages/settings.tsx:64` | "Read-only in W1. Editing lands with T-036." | "Profile editing isn't available yet." |
+| 10 | `pages/settings.tsx:78-80` | "Email is managed by your account; changing it needs an admin. Profile editing, password change and unpair-all land with T-036 (W2)." | "Email is managed by your account; changing it needs an admin. Profile editing, password change and unpair-all aren't available yet." |
+| 11 | `pages/admin.tsx:45-47` | Badge text "Search and filters land with T-073" | Remove the badge. |
+| 12 | `pages/admin.tsx:109-111` | "Deactivate/activate, presets, download links and aggregate stats land with T-073 (W3) — this users list is read-only today." | "User management actions, presets, download links and aggregate stats aren't available yet." |
+| 13 | `pages/landing.tsx:97-100` | "W1 placeholder: the complete landing page, installer detection and download buttons land with T-028. The dashboard routes behind Log in are real." | Delete the paragraph entirely (never ship a placeholder note). |
+| 14 | `pages/landing.tsx:139-141` | "…come from the public /agent-links API. Until an admin publishes them, no fake installer is offered here." | "An admin publishes the macOS, Windows and Linux installers." |
+
+**C-02 (LOW) — error message leaks implementation rationale.** `pages/insights.tsx:96`: "Your last known numbers are not shown because this dashboard does not keep a stale cache." → **"Check your connection and try again."** (§6.1 error copy; title already says "We couldn't load your insights.").
+
+**C-03 (RATIFIED, no fix) — help-card step 1.** Spec wording "Is the Focus Agent running? Its tray icon should be visible." is implemented as "Start your Focus Agent and leave it running — its tray icon should be visible." The implementation is more actionable and is now the spec (§6.3 amended).
+
+### 12.3 Decisions ratified / overridden (explicit reply to A0's three questions)
+
+| ID | Question | Decision | Consequence |
+|---|---|---|---|
+| **D1** | Login 401 copy | **RATIFIED:** `"Email or password is incorrect."` (exact, sentence case, no exclamation mark). Keep `ERROR_MESSAGES.UNAUTHENTICATED` = "Your session has expired. Please log in again." for session-expiry paths only. | §6.2 gained a login-form-only 401 row. A4 keeps `LOGIN_REJECTED_COPY` in `copy/errors.ts:38`. |
+| **D2** | Final badge label set | **RATIFIED:** `Connected` (PAIRED) · `Disconnected` (DISCONNECTED) · `Focusing` (FOCUSING) · `Connecting…` (first seconds) · **plus `Not paired`** for `IDLE` (agent reachable but not linked to this account — honest, not a failure state). Tooltips stay the provider's `detail` sentences (no device-name interpolation before attestation). | §3 badge table amended with the IDLE row + tooltip rule. No A4 change. |
+| **D3** | LNA help card verbatim? | **VERIFIED:** title, body, Chrome/Edge, Firefox, Safari row, "Still not connecting?" steps 2–3 and both buttons are verbatim; only step 1 drifted (C-03). **RATIFIED:** implementation wording, extra `Dismiss` control, and full-width card placement above `<main>` content instead of a badge popover. | §6.3 amended. No A4 change. |
+| **D4** | FocusIndicator visibility (DEC-012 Q3) | **RATIFIED:** authenticated routes + `/403`; no indicator on `/`, `/login`, `/signup`, or standalone `/404` (public catch-all). | §3 + §4.11 amended (404 now documented as standalone). |
+| **D5** | `focusRejected` copy | **RATIFIED:** `UNSUPPORTED` drops the `{reason}` placeholder (never surface raw agent text); add local `ALREADY_FOCUSING` (reuses API string) and `UNAUTHENTICATED` ("Your Focus Agent needs to be verified again. Pair it on Devices."). | §6.2 local table amended. |
+| **D6** | Mobile FocusIndicator placement | **RATIFIED:** sticky top bar at all widths (bottom bar dropped — it risked covering the dialog footer at 360 px). | §8 table amended. |
+| **D7** | Small vocabulary/behaviour choices | **RATIFIED:** session badges `Active/Completed/Cancelled`, device badges `Connected/Disconnected/Focusing`; password hint "8–72 characters, at least one letter and one digit."; pairing errors rendered as field errors rather than a generic banner slot; no-device empty state as numbered description + footnote until installer URLs exist (T-072). | No code change; recorded here so later reviews don't re-flag them. |
+
+### 12.4 Fixes for A4 (W3)
+
+| ID | Severity | File:line | Fix |
+|---|---|---|---|
+| **F-01** | **HIGH** | files in C-01 table | Replace/remove the 14 milestone-jargon strings (§12.2). Test-safe: no test asserts them. Do this even before the W3 feature work — user-visible dev copy is a demo risk. |
+| **F-02** | MED | `pages/focus.tsx` (whole file), `agent/agent-link-provider.tsx:259-267, 243-249` | Build the §4.4 live panel: ring + remaining time + stays-open/stepped-aside summary + large End Focus, driven by `useAgentLink().session`. Add the "Lost contact with your Focus Agent…" warning (§4.4 error state); the provider currently drops `session` on `connectFailed`, so retain a `lastSession`/`linkLost` flag. (T-057) |
+| **F-03** | MED | `pages/dashboard.tsx:26-71, 181-185` | Replace stale Start-card copy; add the Today card (today's focus time, streak, next scheduled session — FR-013/§4.3); wire duration chips + `ConsentModal` (T-056/T-065). |
+| **F-04** | LOW | `pages/insights.tsx:93-100` | Replace the rationale error message with "Check your connection and try again." (C-02). |
+| **F-05** | LOW | `pages/insights.tsx:150-178` | At < 640 px convert the daily table to card rows (§8) or keep internal scroll and record the exception in §8. |
+| **F-06** | LOW | `components/ui/button.tsx:30` | `sm` size is 36 px at ≥ md (`md:h-9`) but §8 requires ≥ 40 px on desktop; affects the FocusIndicator End Focus. Use `md:h-10` (or accept 36 px in §8 if intentional). |
+| **F-07** | LOW | `pages/devices.tsx:81-91, 152-160` | Add the §4.5/§6.4 download actions and allow-list version line once `/agent-links` is live (T-072, Phase 5). |
+| **F-08** | LOW | `components/agent/agent-status-badge.tsx:38-42` | T-084 a11y pass: avoid `aria-label` + live child text double-announcement. Keep the accessible name pattern `Focus Agent status: …` — `e2e/pairing.spec.ts:127` and `e2e/smoke.spec.ts:46` depend on it. |
+| **F-09** | INFO | `pages/landing.tsx:44-61` | Add "How it works"/"Download" section anchors when the full landing page lands (T-028); the help card already links `/#downloads-heading`. |
+
+### 12.5 Not verifiable statically / residual risks
+
+- **NFR-006** — the 360/768/1440 `scrollWidth` assertion (§8) is not automated yet: `e2e/` has pairing/smoke specs but no viewport test. Static inspection found no overflow risk, so the PASS above is provisional (T-085).
+- **NFR-008 contrast** — PASS is token-level: the 45 implemented tokens are value-identical to the audited set, so §2 ratios carry over; only an axe run on rendered pages proves computed styles (T-084).
+- **Behavioural claims** — the 42 unit tests cover components and the link/session data path with mocks; pairing → focus → end against a real agent is still unproven by this review (T-093 E2E, Phase 8 manual).
+- **Deferred areas** — §4.3 dashboard Today, §4.4 session UI, §4.5 download actions, §4.6 editor/presets, §4.7 CRUD, §4.9 edit/password/unpair-all, §4.10 tabs/search/actions, §7 agent window/tray are **unverified**, not passing; re-review them at the W3/W4 gate.
+- **Spec deltas applied by this review:** §3 badge table + FocusIndicator paragraph, §4.11, §6.2 (login 401 row + local-channel table), §6.3, §8 FocusIndicator row, §11 resolved questions. No other normative text changed.
