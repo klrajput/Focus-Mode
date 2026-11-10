@@ -1,0 +1,115 @@
+# Focus Agent packaging — electron-builder 26.18.0 (task T-110).
+# Builds Windows NSIS + portable, macOS dmg + zip (arm64/x64) and Linux AppImage + deb.
+# Code signing is OPTIONAL: with no CSC_LINK / Developer ID present, electron-builder skips
+# codesign and produces unsigned artifacts (see docs/RELEASING.md for the user workaround).
+# There is deliberately no auto-update: electron-updater is P2, so no `electron-updater`
+# dependency and no generated update feed. Uploads are done by .github/workflows/release.yml
+# with `--publish never` + `gh release create --draft`; this block only declares the provider.
+appId: com.focusmode.agent
+productName: Focus Mode Agent
+directories:
+  buildResources: build
+  output: release
+
+# Application files (relative to agent/): compiled main/preload/renderer + package.json.
+# Production node_modules (ws, koffi, electron-log, zod, dotenv, @focus-mode/shared) are
+# collected automatically by electron-builder; dev deps, tests, sources and maps are not.
+files:
+  - dist/**/*
+  - package.json
+  - '!dist/**/*.map'
+  - '!dist/**/*.d.ts'
+  - '!dist/**/*.test.js'
+  - '!**/*.test.*'
+  - '!src/**'
+  - '!.env'
+  - '!.env.*'
+  - '!**/tsconfig*.json'
+
+asar: true
+# koffi ships a prebuilt Node-API shared library. It must stay outside the asar archive so
+# the OS loader can dlopen it (only the Windows driver lazy-loads koffi; macOS uses JXA).
+asarUnpack:
+  - node_modules/koffi/**
+
+# koffi's binding is an ABI-stable Node-API prebuild and the package has no node-gyp
+# project, so an Electron-header rebuild would fail — keep the shipped prebuilt binaries.
+npmRebuild: false
+
+publish:
+  # Declared so artifacts carry update metadata, but this project has NO auto-update (P2).
+  # The workflow always passes `--publish never` and uploads with `gh release create --draft`.
+  # owner/repo are explicit on purpose: with a workspace layout electron-builder cannot infer
+  # them from .git/config when projectDir is agent/, and a null publish config crashes its
+  # update-info builder ("Cannot read properties of null (reading 'channel')").
+  provider: github
+  owner: klrajput
+  repo: Focus-Mode
+  releaseType: draft
+
+win:
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # Per-user install, no admin rights, standard uninstaller, data kept on uninstall.
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  shortcutName: Focus Mode Agent
+  deleteAppDataOnUninstall: false
+  artifactName: focus-mode-agent-${version}-win-setup.${ext}
+
+portable:
+  artifactName: focus-mode-agent-${version}-win-portable.${ext}
+
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  # Both macOS architectures are shipped, but each is built on its own runner in
+  # release.yml (`--arm64` on macos-latest, `--x64` on macos-15-intel). Do NOT put an
+  # `arch` list here: electron-builder would then build BOTH arches on every mac runner
+  # and duplicate the release assets.
+  target:
+    - dmg
+    - zip
+  # Hardened runtime + entitlements only take effect when a signing identity is present;
+  # without CSC_LINK electron-builder skips codesign for every architecture.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  gatekeeperAssess: false
+  extendInfo:
+    NSAppleEventsUsageDescription: >-
+      Focus Mode Agent uses AppleScript (JavaScript for Automation) as a macOS fallback to
+      move other apps aside while focus is active and to restore them when it ends. You can
+      deny this permission; the agent will then report that it cannot enforce focus.
+  artifactName: focus-mode-agent-${version}-mac-${arch}.${ext}
+
+dmg:
+  title: Focus Mode Agent ${version}
+
+linux:
+  icon: build/icon.png
+  category: Utility
+  maintainer: Focus Mode Team <team@focusmode.invalid>
+  synopsis: Timed focus sessions that step other apps aside on your own machine
+  description: >-
+    Focus Mode Agent enforces a timed focus session on the machine it is installed on:
+    it steps other apps aside while the dashboard and allow-listed apps stay available,
+    shows a visible focus state and always restores normal use when the session ends.
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: focus-mode-agent-${version}-linux-${arch}.${ext}

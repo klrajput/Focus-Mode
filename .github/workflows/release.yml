@@ -1,0 +1,178 @@
+# Focus Mode — desktop release pipeline (task T-112).
+# Triggered by a maintainer-pushed `v*` tag (or manually via workflow_dispatch = dry-run build,
+# no release). Each runner builds installers for its own OS with electron-builder and uploads
+# them as workflow artifacts; a final job creates a DRAFT GitHub release from those artifacts
+# on tag pushes only. Signing/notarisation is optional — every job must pass unsigned.
+# Third-party actions are pinned to full 40-char commit SHAs with their source tag in a comment
+# (resolved 2026-11-10 with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Never cancel a release build halfway through; one release per ref at a time.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows: NSIS installer + portable exe (both x64, per electron-builder.yml).
+          - name: windows-x64
+            os: windows-latest
+            args: --win --x64
+            artifact-pattern: |
+              agent/release/*.exe
+          # macOS: dmg + zip, one runner per architecture (macos-15-intel is the x64 image;
+          # macos-13 is retired — never use it).
+          - name: macos-arm64
+            os: macos-latest
+            args: --mac --arm64
+            artifact-pattern: |
+              agent/release/*.dmg
+              agent/release/*.zip
+          - name: macos-x64
+            os: macos-15-intel
+            args: --mac --x64
+            artifact-pattern: |
+              agent/release/*.dmg
+              agent/release/*.zip
+          # Linux: AppImage + deb (x64).
+          - name: linux-x64
+            os: ubuntu-24.04
+            args: --linux --x64
+            artifact-pattern: |
+              agent/release/*.AppImage
+              agent/release/*.deb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # `shared` must be compiled before the agent's tsc run resolves @focus-mode/shared.
+      - name: Build shared protocol package
+        run: npm run build --workspace shared
+
+      - name: Build Focus Agent
+        run: npm run build --workspace agent
+
+      - name: Build installers
+        working-directory: agent
+        env:
+          # Optional code signing. Unset/empty secrets = unsigned build, which must still pass.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Optional macOS notarisation. electron-builder only runs @electron/notarize when all
+          # three values below are present; no `mac.notarize: false` override is set (T-110).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - name: List produced artifacts
+        working-directory: agent
+        shell: bash
+        run: ls -l release
+
+      - name: Upload installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: focus-agent-${{ matrix.name }}
+          path: ${{ matrix.artifact-pattern }}
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    # BLOCKED for T-113 (as of 2026-11-10): agent/src/main.ts has no AGENT_SMOKE hook.
+    # Required hook contract: when AGENT_SMOKE=1 the packaged agent starts headless
+    # (AGENT_HEADLESS=1 style), binds 127.0.0.1:AGENT_PORT, answers exactly one `hello`,
+    # writes the bound port to stdout and calls app.exit(0); anything else exits non-zero.
+    # When A7 adds it, flip `if: false` to `if: always() && needs.build.result == 'success'`,
+    # add a per-OS launcher (e.g. scripts/smoke/launch.mjs that unpacks/installs the artifact
+    # and runs it), and add `smoke` to the release job's `needs`.
+    name: smoke (${{ matrix.name }})
+    if: false
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+          - name: macos-arm64
+            os: macos-latest
+          - name: macos-x64
+            os: macos-15-intel
+          - name: linux-x64
+            os: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: focus-agent-${{ matrix.name }}
+          path: smoke-assets
+
+      - name: Launch packaged app in smoke mode (expects exit 0)
+        env:
+          AGENT_SMOKE: '1'
+          AGENT_HEADLESS: '1'
+          AGENT_USER_DATA_DIR: ${{ runner.temp }}/agent-smoke-profile
+        run: node scripts/smoke/launch.mjs "${{ matrix.name }}" smoke-assets
+
+  release:
+    name: publish draft GitHub release
+    # Tag pushes only: workflow_dispatch runs are build-only dry runs.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        working-directory: release-assets
+        shell: bash
+        run: |
+          shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --draft \
+            --title "Focus Mode Agent ${GITHUB_REF_NAME}" \
+            --notes "Automated draft from .github/workflows/release.yml. Install steps, unsigned-build caveats and per-OS artifact list: docs/RELEASING.md."
