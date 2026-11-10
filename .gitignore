@@ -8,6 +8,9 @@ out/
 release/
 client/dist/
 agent/release/
+# ...except the committed electron-builder assets (app icons + entitlements, T-110).
+!agent/build/
+!agent/build/**
 
 # Test / coverage output
 coverage/
