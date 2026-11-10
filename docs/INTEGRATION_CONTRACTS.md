@@ -1,8 +1,8 @@
 # INTEGRATION_CONTRACTS.md — frozen contracts for Focus Mode (contracts-v1)
 
-> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1/W2 implemented and merged (CI green), **W3 merged** (real macOS FOCUS-1/2 verified; 844 unit tests; 14/14 E2E), **W4 in progress**. W2 decisions (DEC-013/014/015/016) and W3/W4 additions C-14…C-20 are recorded below; all five sign-offs ACCEPTED (§10).
+> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1–W5 implemented and merged (W5 gate: 1128 unit tests, 27/27 E2E, 0 skipped), **W6 in progress**. W2 decisions (DEC-013/014/015/016), W3/W4 additions C-14…C-20 and W5 additions C-21…C-25 are recorded below and verified against shipped code (§10). All role sign-offs ACCEPTED (§10).
 > **Machine-readable source of truth:** `shared/src/` (zod schemas + inferred types). This document is the human-readable contract and is kept consistent with it by `/tmp/a2-contracts/check.mjs` (§11).
-> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016/017/019** (the W4 schedule-run lifecycle is DEC-021 — A0 to append its ADR text) · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
+> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016/017/019/021/022/023/024** · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
 > **Change process:** any change to a message, endpoint, schema, field or status code requires an ADR + this doc + `shared/` update + A2 + A8 approval + a contract test (AGENTS §5). Requests go in the table in §8 — do not edit the doc directly without that process.
 
 ---
@@ -136,7 +136,7 @@ Every list endpoint returns the standard paginated shape and accepts the standar
 ```
 
 - Query: `page` (integer ≥ 1, default `1`), `limit` (integer 1–100, default `20`), `sort` (per-resource whitelist, default below), `search` (optional, 1–100 chars, `$`/`.` operators stripped).
-- `sort` accepts a field name or the same name prefixed with `-` for descending. Whitelists live in shared: `sessionsSortSchema` (`startedAt`, `endedAt`, `plannedMinutes`, `actualMinutes`), `devicesSortSchema` (`name`, `lastSeenAt`, `createdAt`), `adminUsersSortSchema` (`name`, `email`, `createdAt`, `lastLoginAt`). Lists without a shared sort schema (schedules, notifications, presets, agent links) accept `page`/`limit` only and use a fixed deterministic sort (`createdAt` desc). Exception (C-18): `GET /schedules` is sorted **`startTime asc, _id asc`** (per-resource order, DEC-019).
+- `sort` accepts a field name or the same name prefixed with `-` for descending. Whitelists live in shared: `sessionsSortSchema` (`startedAt`, `endedAt`, `plannedMinutes`, `actualMinutes`), `devicesSortSchema` (`name`, `lastSeenAt`, `createdAt`), `adminUsersSortSchema` (`name`, `email`, `createdAt`, `lastLoginAt`). Lists without a shared sort schema accept `page`/`limit` only and use a fixed per-resource order (all verified against shipped code, C-18/C-25): `GET /schedules` → **`startTime asc, _id asc`** (C-18); `GET /notifications` → **`createdAt desc, _id desc`**; `GET /presets` and `GET /admin/presets` → **`createdAt desc, _id desc`**; `GET /agent-links` (public) → **`os asc, arch asc, _id asc`**; `GET /admin/agent-links` → **`publishedAt desc, _id desc`**. Admin user lists keep the frozen `sort` whitelist (`adminUsersSortSchema`) and additionally accept the C-25 filters.
 - Errors: `400 VALIDATION_ERROR`, `401 UNAUTHENTICATED`.
 
 ### 1.7 Shared module surface (what each package may import)
@@ -276,7 +276,7 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 
 | # | Method | Path | Access | Request schema | Success data (status) | Errors |
 |---|---|---|---|---|---|---|
-| 1 | GET | `/health` | `public` | — | `{"status":"ok","db":"ok","uptimeSec":42}` (200) | — |
+| 1 | GET | `/health` | `public` | — | `{"status":"ok","db":"ok","uptimeSec":42}` (200) — served both at the API base and at the process root (hosting alias); readiness variant is #46 (C-25) | — |
 | 2 | POST | `/auth/register` | `public` | `registerSchema` | auth result (201) | `VALIDATION_ERROR`, `CONFLICT`, `RATE_LIMITED` |
 | 3 | POST | `/auth/login` | `public` | `loginSchema` | auth result (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `ACCOUNT_DISABLED`, `RATE_LIMITED` |
 | 4 | POST | `/auth/logout` | `auth` | — | `{"loggedOut":true}` (200) | `UNAUTHENTICATED` |
@@ -296,13 +296,13 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 18 | POST | `/schedules` | `USER` | `scheduleCreateSchema` | schedule (201) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 19 | PATCH | `/schedules/:id` | `USER` | `scheduleUpdateSchema` | schedule (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND` |
 | 20 | DELETE | `/schedules/:id` | `USER` | — | `{"id":"<id>"}` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
-| 21 | GET | `/insights` | `USER` | `insightsQuerySchema` | insights (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
-| 22 | GET | `/notifications` | `USER` | — (page/limit) | paginated notifications (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| 21 | GET | `/insights` | `USER` | `insightsQuerySchema` | insights (200; optional `weekly` for `30d`/`90d` — C-24) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| 22 | GET | `/notifications` | `USER` | — (page/limit) | paginated notifications **+ `unreadCount`** (200; newest first — C-22) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 23 | PATCH | `/notifications/:id/read` | `USER` | — | notification (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
 | 24 | GET | `/presets` | `USER` | — (page/limit) | paginated presets (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 25 | GET | `/agent-links` | `public` | — (page/limit) | paginated agent links (200) | `VALIDATION_ERROR` |
-| 26 | GET | `/admin/users` | `ADMIN` | `adminUserListQuerySchema` | paginated public users (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| 27 | PATCH | `/admin/users/:id` | `ADMIN` | `adminUserPatchSchema` | public user (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| 26 | GET | `/admin/users` | `ADMIN` | `adminUserListQuerySchema` (+ additive `role?` / `isActive?` filters — C-25) | paginated public users (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| 27 | PATCH | `/admin/users/:id` | `ADMIN` | `adminUserPatchSchema` | public user (200) — self-deactivation/self-demotion → `409 CONFLICT` (C-25) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT` |
 | 28 | GET | `/admin/presets` | `ADMIN` | — (page/limit) | paginated presets (200) | `UNAUTHENTICATED`, `FORBIDDEN` |
 | 29 | POST | `/admin/presets` | `ADMIN` | `presetCreateSchema` | preset (201) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `CONFLICT` |
 | 30 | PATCH | `/admin/presets/:id` | `ADMIN` | `presetUpdateSchema` | preset (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
@@ -311,7 +311,7 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 33 | POST | `/admin/agent-links` | `ADMIN` | `agentLinkCreateSchema` | agent link (201) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
 | 34 | PATCH | `/admin/agent-links/:id` | `ADMIN` | `agentLinkUpdateSchema` | agent link (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
 | 35 | DELETE | `/admin/agent-links/:id` | `ADMIN` | — | `{"id":"<id>"}` (200) | `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| 36 | GET | `/admin/stats` | `ADMIN` | — | aggregate stats (200) | `UNAUTHENTICATED`, `FORBIDDEN` |
+| 36 | GET | `/admin/stats` | `ADMIN` | — | aggregate stats — 7 canonical keys + 4 additive aliases (200; C-25) | `UNAUTHENTICATED`, `FORBIDDEN` |
 | 37 | POST | `/agent/register` | `agent-public` | `deviceRegisterSchema` | `{"deviceId":"<id>","enrollSecret":"<secret>"}` (201) | `VALIDATION_ERROR`, `CONFLICT`, `RATE_LIMITED` |
 | 38 | POST | `/agent/enroll/poll` | `agent-secret` | `enrollPollSchema` | `{"deviceToken":"<token>","userId":"<id>","allowListVersion":1}` (200; `404` while pending/unpaired or bad secret, `410` once consumed) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `PAIRING_EXPIRED` |
 | 39 | GET | `/agent/allowlist` | `agent-device` | — | `{"protectedApps": appEntry[], "userApps": appEntry[], "version": integer}` (200) — device-token auth, used for scheduled starts (C-20) | `UNAUTHENTICATED`, `NOT_FOUND` |
@@ -319,10 +319,13 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 41 | WS | `/agent-link` | `device-token (WS)` | — | cloud messages, §5 | close `4401` on bad token |
 | 42 | GET | `/sessions/active` | `USER` | — | `{"session": session\|null}` (200) — current ACTIVE session for dashboard refresh/link reconnect (C-15) | `UNAUTHENTICATED` |
 | 43 | POST | `/allowlist/preset/:id` | `USER` | — (`?mode=merge\|replace`, default `merge`; server-validated query) | allow-list (200) — preset applied to `userApps`, protected apps filtered, `protectedApps` untouched (C-16) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND` |
+| 44 | GET | `/users/me` | `auth` | — | public user (200) — same shape as `/auth/me`, fresh from the `requireAuth` DB load (C-21) | `UNAUTHENTICATED` |
+| 45 | POST | `/devices/unpair-all` | `USER` | — | `{"unpaired": number}` (200) — pushes `revoked` to every connected agent, then deletes all caller device rows; `0` when none (C-23) | `UNAUTHENTICATED` |
+| 46 | GET | `/health/db` | `public` | — | `{"status":"ok","db":"ok"}` (200) or `503` `{"code":"INTERNAL"}` while mongoose is not connected — readiness probe (C-25) | `INTERNAL` (503) |
 
 ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — never per-user session detail.
 
-Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); the original 41-operation frozen set from TECHNICAL_DESIGN §5.2 is otherwise unchanged (C-17/C-18 clarify existing rows #12/#14/#17).
+Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); **#44–#46** are the W5 additions/probe variants (C-21/C-23/C-25). The original 41-operation frozen set from TECHNICAL_DESIGN §5.2 is otherwise unchanged (C-17/C-18 clarify existing rows #12/#14/#17). Shipped-code review found **no invented operations** — 46/46 rows match implemented routes.
 
 ### 3.2 Request schemas (single source of truth)
 
@@ -342,12 +345,12 @@ Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); the
 | `scheduleCreateSchema` | #18 | `{name, days, startTime, durationMin, enabled?=true}` |
 | `scheduleUpdateSchema` | #19 | any non-empty subset of the create fields |
 | `insightsQuerySchema` | #21 | `{range: "7d"\|"30d"\|"90d" (default 7d), timezone?}` |
-| `adminUserListQuerySchema` | #26 | `page`, `limit`, `sort`, `search` |
+| `adminUserListQuerySchema` | #26 | `page`, `limit`, `sort`, `search`; server extends it with additive `role` / `isActive` filters (C-25; the shared schema itself is unchanged) |
 | `adminUserPatchSchema` | #27 | any non-empty subset of `{name?, role?, isActive?}` |
 | `presetCreateSchema` | #29 | `{name, apps: appEntry[] (1–50, unique keys)}` |
 | `presetUpdateSchema` | #30 | any non-empty subset of `{name?, apps?}` |
-| `agentLinkCreateSchema` | #33 | `{os, arch, label, url (absolute), version (semver)}` |
-| `agentLinkUpdateSchema` | #34 | any non-empty subset of the create fields |
+| `agentLinkCreateSchema` | #33 | `{os, arch, label, url, version (semver)}`; the server additionally enforces an absolute **https** URL on the GitHub hosts `github.com` / `objects.githubusercontent.com` with no credentials (C-25) |
+| `agentLinkUpdateSchema` | #34 | any non-empty subset of the create fields; a supplied `url` is re-checked with the same https/GitHub-host rule (C-25) |
 | `deviceRegisterSchema` | #37 | `{codeHmac, os, name, agentVersion}`; `codeHmac` = 64-char lowercase SHA-256 hex of `"focus-mode-pair-v1\|" + code` (DEC-014) |
 | `enrollPollSchema` | #38 | `{deviceId, enrollSecret}` (32–128 URL-safe chars). Status semantics (C-12): `404 NOT_FOUND` while the device is registered but not yet owned/paired (`ownerId` null) **and** for a wrong/unknown `enrollSecret` (indistinguishable, no enumeration); `200` + token once paired with a matching secret; `410 PAIRING_EXPIRED` once the token has been issued (enrollment consumed). The agent treats `404`/`202`/`204`/`200`-without-token as pending → retries with backoff until the 10-min code TTL; `400/401/403/409/410` are terminal. |
 | `appEntrySchema` | nested everywhere | `{key: [a-z0-9-]{2,40}, label: 2–60, win?: string[], mac?: string[], linux?: string[]}` |
@@ -355,11 +358,16 @@ Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); the
 
 Every schema is a strict object → unknown fields are rejected (NFR-013); validation failures return `400 VALIDATION_ERROR` with `details[]` (NFR-001).
 
-**Non-schema request parameters (W3/W4 additions):**
+**Non-schema request parameters and response additions (W3/W4/W5, verified against shipped code):**
 - **C-15** `GET /sessions/active` — no body/query; response `{session: PublicSession|null}` (§3.3 session shape).
 - **C-16** `POST /allowlist/preset/:id` — query `?mode=merge|replace` (default `merge`), validated server-side against a strict enum (`VALIDATION_ERROR` otherwise); response is the standard allow-list object; protected entries in the preset are filtered out and `protectedApps` is never modified (INV-3).
 - **C-17** `GET /sessions` — exactly `page,limit,sort,search,from,to,status,source`; **no `deviceId`**.
 - **C-18** `GET /schedules` — ordering `startTime asc, _id asc`; replayed `POST /sessions` (same `clientSessionId` + same body) returns `200` with the original session (first create `201`); clients treat both as success.
+- **C-21** `GET /users/me` — no body; 200 public user (identical shape to `/auth/me`).
+- **C-22** `GET /notifications` — `page`/`limit` only; response is the standard paginated shape **plus `unreadCount`** (counted over ALL the caller's notifications, not just the current page). `PATCH /notifications/:id/read` is idempotent and keeps the first `readAt`.
+- **C-23** `POST /devices/unpair-all` — no body; 200 `{unpaired: number}`; the `revoked` frame is pushed to each connected agent first, then all device rows of the caller are deleted (INV-5). Offline devices are revoked in the DB; zero devices → `{unpaired:0}`.
+- **C-24** `GET /insights` — response adds optional `weekly` (present only for `30d`/`90d`); all analytics choices are documented in §3.3.
+- **C-25** admin/health deltas verified against `server/src/services/admin.service.ts` + `health.routes.ts`: `GET /admin/users` accepts optional `role` (`USER|ADMIN`) and `isActive` (`"true"|"false"`, strict string enum) filters on top of the frozen query; `PATCH /admin/users/:id` answers `409 CONFLICT` for self-deactivation **and** self-demotion; `POST`/`PATCH /admin/agent-links` accept only absolute **https** URLs on `github.com` or `objects.githubusercontent.com` (no credentials; otherwise `400 VALIDATION_ERROR` with `details[{path:'url'}]`); `GET /admin/stats` includes four additive aliases; `GET /health/db` is a readiness probe (503 `INTERNAL` when mongoose is down — outside the standard business status table).
 
 Mongo collections touched by these endpoints (TECHNICAL_DESIGN §4): `users`, `devices`, `sessions`, `allowlists`, `schedules`, `presets`, `scheduleRuns`, `notifications`, `agentLinks`. The API is the only writer (the dashboard and Focus Agent never touch Mongo directly).
 
@@ -374,10 +382,12 @@ Mongo collections touched by these endpoints (TECHNICAL_DESIGN §4): `users`, `d
 | `allow-list` | `{protectedApps: appEntry[], userApps: appEntry[], version}` — server seeds `protectedApps` from `shared/src/protected.ts`; PUT cannot change them |
 | `schedule` | `{id, name, days, startTime, durationMin, enabled, lastRunAt, createdAt}` |
 | `notification` | `{id, type, message, readAt, createdAt}` |
+| `notification page` | paginated `notification` **plus `unreadCount`** (over all the caller's notifications, not just the page — C-22; newest first) |
 | `preset` | `{id, name, apps, createdAt}` |
 | `agent link` | `{id, os, arch, label, url, version, publishedAt}` |
-| `insights` | `{range, timezone, totals:{focusMinutes, sessions, completed, cancelled, completionRate, currentStreak, longestStreak}, daily:[{date, minutes}], bestHours:[{hour, minutes}]}` (analytics definitions: REQUIREMENTS §6) |
-| `admin stats` | `{users, activeUsers, devices, connectedDevices, sessions, activeSessions, focusMinutes}` — aggregates only |
+| `insights` | `{range, timezone, totals:{focusMinutes, sessions, completed, cancelled, completionRate, currentStreak, longestStreak}, daily:[{date, minutes}], weekly?:[{weekStart, minutes}], bestHours:[{hour, minutes}]}` — **daily is always the last 7 local days regardless of range**; `weekly` (Monday-start `YYYY-MM-DD`) is present only for `30d`/`90d`; minutes are COMPLETED-only (ACTIVE/CANCELLED excluded), rounded to 0.1; completionRate = COMPLETED÷(COMPLETED+CANCELLED) rounded to 3dp (0 when none); streaks are all-time COMPLETED days with ≥10 min anchored today/yesterday; bestHours = top-3 local hours in range (C-24, REQUIREMENTS §6) |
+| `admin stats` | seven canonical keys `{users, activeUsers, devices, connectedDevices, sessions, activeSessions, focusMinutes}` **plus four additive aliases** `{totalUsers, totalSessions, totalFocusMinutes, devicesConnected}` (same aggregates); `connectedDevices` = devices with status `CONNECTED` or `FOCUSING`; `focusMinutes` = Σ `actualMinutes` over all sessions rounded to 0.1; aggregates only, no per-user data (C-25) |
+| `health` | `{status:'ok', db, uptimeSec}` for `/health` (db is disconnected/connecting/ok/disconnecting); `{status:'ok', db:'ok'}` for `/health/db` (200 when connected, otherwise 503 `INTERNAL`) |
 
 ### 3.4 Worked examples
 
@@ -518,7 +528,7 @@ Omitting or altering a protected entry → `400`:
 }
 ```
 
-`GET /insights?range=7d` response `200`:
+`GET /insights?range=30d` response `200` (daily is always the last 7 local days; `weekly` appears because the range is 30d — C-24):
 
 ```json
 {
@@ -536,8 +546,17 @@ Omitting or altering a protected entry → `400`:
       "longestStreak": 4
     },
     "daily": [
-      { "date": "2026-11-04", "minutes": 25 },
-      { "date": "2026-11-05", "minutes": 60.5 }
+      { "date": "2026-11-05", "minutes": 25 },
+      { "date": "2026-11-06", "minutes": 60.5 },
+      { "date": "2026-11-07", "minutes": 0 },
+      { "date": "2026-11-08", "minutes": 55 },
+      { "date": "2026-11-09", "minutes": 40 },
+      { "date": "2026-11-10", "minutes": 35 },
+      { "date": "2026-11-11", "minutes": 30 }
+    ],
+    "weekly": [
+      { "weekStart": "2026-10-26", "minutes": 120 },
+      { "weekStart": "2026-11-02", "minutes": 245.5 }
     ],
     "bestHours": [
       { "hour": 9, "minutes": 120 },
@@ -577,12 +596,94 @@ Omitting or altering a protected entry → `400`:
 }
 ```
 
+`GET /users/me` response `200` (identical shape to `/auth/me` — C-21):
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "507f1f77bcf86cd799439012",
+    "name": "Kabir",
+    "email": "kabir@demo.com",
+    "role": "USER",
+    "timezone": "Asia/Kolkata",
+    "defaultDurationMin": 60,
+    "isActive": true,
+    "createdAt": "2026-11-10T10:00:00.000Z",
+    "lastLoginAt": "2026-11-11T05:30:00.000Z"
+  }
+}
+```
+
+`GET /notifications?page=1&limit=2` response `200` (paginated shape **plus `unreadCount`** — C-22):
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "507f1f77bcf86cd799439031",
+        "type": "MISSED_RUN",
+        "message": "Your 09:00 focus session was missed because the Focus Agent was offline.",
+        "readAt": null,
+        "createdAt": "2026-11-11T03:31:00.000Z"
+      }
+    ],
+    "page": 1,
+    "limit": 2,
+    "total": 1,
+    "totalPages": 1,
+    "unreadCount": 1
+  }
+}
+```
+
+`POST /devices/unpair-all` response `200` (`revoked` pushed to each connected agent before the rows are deleted — C-23):
+
+```json
+{
+  "success": true,
+  "data": { "unpaired": 2 }
+}
+```
+
+`GET /admin/stats` response `200` (seven canonical keys + four additive aliases — C-25):
+
+```json
+{
+  "success": true,
+  "data": {
+    "users": 12,
+    "activeUsers": 11,
+    "devices": 7,
+    "connectedDevices": 3,
+    "sessions": 184,
+    "activeSessions": 1,
+    "focusMinutes": 5210.5,
+    "totalUsers": 12,
+    "totalSessions": 184,
+    "totalFocusMinutes": 5210.5,
+    "devicesConnected": 3
+  }
+}
+```
+
 `GET /health` response `200`:
 
 ```json
 {
   "success": true,
   "data": { "status": "ok", "db": "ok", "uptimeSec": 42 }
+}
+```
+
+`GET /health/db` response `200` (readiness; `503` with `{code:"INTERNAL"}` while mongoose is not connected — C-25):
+
+```json
+{
+  "success": true,
+  "data": { "status": "ok", "db": "ok" }
 }
 ```
 
@@ -623,7 +724,7 @@ Before `authOk`, the agent accepts **only** these inbound messages (exported as 
 - every other failure — malformed token, non-`EdDSA` alg, bad signature, expired or over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unavailable/unusable/unknown key, or an unpaired agent → `authError{code:'UNAUTHENTICATED'}`.
 The socket is closed after either error (`1008`).
 
-**Current W2 scope (not final contract).** After a valid attestation, dashboard control messages (`enterFocus`, `exitFocus`, `listApps`) are rejected with `focusRejected{code:'INVALID'}` until W3 wires the FocusController + REC-004 native consent. This is honest fail-closed behaviour, not the final contract: §4.5 remains the frozen message contract, and W3 replaces the rejection with real handling.
+**Control messages (W3 shipped; verified in the W6 review).** After a valid attestation, `enterFocus`, `exitFocus` and `listApps` are routed to the Focus Agent's real control handlers (`link/handlers.ts` → `FocusController`, with the REC-004 native consent gate for the first focus on a device). A fail-closed `focusRejected{code:'INVALID'}` is returned only when a build has no control handlers wired (test harnesses) or the request cannot be processed — it is a defensive fallback, not the current product behaviour. §4.5 remains the frozen message contract.
 
 ### 4.4 Handshake (REC-003, SEC-7)
 
@@ -868,7 +969,7 @@ Fields: `scheduleId: ObjectId`, `startsAt: iso`. Invariant: **INV-2** (a schedul
 | `NOT_PAIRED` | agent has no device token | show "Pair a device" |
 | `CONSENT_REQUIRED` | native agent consent (REC-004) not yet given | show agent-side dialog hint |
 | `UNSUPPORTED` | `capabilities.focus = unsupported` (e.g. Wayland) | disable Start with reason (FR-005) |
-| `INVALID` | malformed request (zod failure inside the agent) | log + toast |
+| `INVALID` | malformed/unprocessable control request (strict-schema failure inside the agent, controller error, or no control handlers wired in this build) | log + toast |
 
 ### 4.7 Reconnect & resync (FR-014)
 
@@ -1041,6 +1142,8 @@ Fields: none. Invariants: **INV-2**, **INV-5** (agent restores first if FOCUSING
 
 These additions were reviewed by **A2 against the W3/W4 code and ADRs (DEC-017/DEC-019/DEC-021)** on 2026-11-10; A8 re-checks them in the W4 integration pass. INV-2 is unchanged — cloud→agent remains exactly `[scheduleDue, revoked]`.
 
+**W6 shipped-message review (2026-11-11):** all 16 local + 6 cloud messages match the shipped agent/server code. The `/agent-link` hub accepts exactly the four `AGENT_TO_CLOUD` types (`heartbeat`, `session.started`, `session.ended`, `scheduleRunCancelled`) and still sends only `scheduleDue`/`revoked`; the local link routes authenticated control messages to the W3 handlers. **No message drift found.**
+
 ---
 
 ## 7. Error handling matrix (REST + local channel)
@@ -1055,7 +1158,9 @@ These additions were reviewed by **A2 against the W3/W4 code and ADRs (DEC-017/D
 
 | # | Requested by | Date (IST) | Contract area | Proposed change | Status |
 |---|---|---|---|---|---|
-| — | — | — | — | *No changes requested since the `contracts-v1` freeze (2026-11-10).* | — |
+| 1 | A2 (shipped-code review, W6) | 2026-11-11 | `/health` probes | Document the shipped `GET /health/db` readiness variant + root `/health` hosting alias, including `503 INTERNAL` when the DB is down (shipped in W1; never in the contract table). | ACCEPTED — documented in C-25 |
+| 2 | A2 (shipped-code review, W6) | 2026-11-11 | Admin API | Document the W5 additive admin surface: four stats aliases, `role`/`isActive` filters, self-demotion/-deactivation `409 CONFLICT`, agent-link https + GitHub host allowlist. | ACCEPTED — documented in C-25 |
+| 3 | A2 (shipped-code review, W6) | 2026-11-11 | List ordering | Record the shipped per-resource orders (notifications `createdAt desc`; presets `createdAt desc`; public agent-links `os,arch,_id`; admin agent-links `publishedAt desc`) instead of the old generic `createdAt desc` sentence. | ACCEPTED — documented in §1.6 / C-25 |
 
 To request a change: add a row here **and** notify A2/A8 and A0 — then follow §9. Do not implement a divergent message/endpoint/schema “just for now”; a rejected request keeps the frozen contract.
 
@@ -1082,10 +1187,13 @@ Rules that never change without replacing an INV in AGENTS §3: envelopes, the 1
 | Database | A6 | Data shapes behind §3 (9 collections + indexes incl. partial-unique ACTIVE session per device, DEC-013 seed identities) | **ACCEPTED** | 2026-11-10 | PR #4 merged; CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests |
 | Desktop Agent | A7 | Local WS server/handshake, all 16 local messages, cloud client/heartbeat/idempotency | **ACCEPTED** | 2026-11-10 | PR #4 merged (agent W1); CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests; W2 cloud/auth tracked in T-042/T-044 |
 | Integration | A8 | Contract tests, env/base-URL convention, pairing flow, cross-package consistency | **ACCEPTED** | 2026-11-10 | 93/93 automated contract checks; pairing E2E green on merged W2; C-12/C-13 match shipped code |
+| Contract fold-in review (W4/W5) | A2 | Shipped-code review of all W4/W5 REST routes + local/cloud messages; C-14…C-25 fold-in | **SIGNED** | 2026-11-11 | 46/46 endpoints, 16/16 local + 6/6 cloud messages verified against code; C-21…C-25 verified; no contract-breaking drift (1128 unit tests + 27/27 E2E at the W5 gate) |
 
 A0 recorded W1 acceptance on 2026-11-10: **PRs #2/#3/#4 merged, CI green on `ubuntu-24.04` / `windows-latest` / `macos-latest`, unit/integration suites 353 tests green**. W2 (pairing + attestation + agent-link hub + agent cloud client + client AgentLink) is **merged to `main` with CI green**. A8 signed off the contract on 2026-11-10 (**93/93 automated contract checks; pairing E2E green on merged W2; C-12/C-13 match shipped code**), so **all five rows are ACCEPTED**; the `contracts-v1` tag stands, and any further wire change follows §9 (`contracts-v1.1`). A8/A0 also confirmed the C-12 wording (404 when `ownerId` is `null` or the enroll secret is wrong/unknown; 200 once paired with a matching secret; 410 once consumed) matches shipped code.
 
 **W4 contract additions** (C-14…C-20; new agent→cloud `scheduleRunCancelled`; optional `session.started.scheduleRunId`) were **A2-reviewed on 2026-11-10** and are recorded in §12; A8 re-checks them in the W4 integration pass.
+
+**W5 contract additions** (C-21…C-25) were reviewed against the **shipped W5 code** and **A2-signed on 2026-11-11**; the W6 delta list (documented drift vs code bugs) is in that task's report. No frozen wire format changed — C-21…C-25 are additive endpoints/fields, response aliases, security tightening and ordering documentation.
 
 ---
 
@@ -1097,7 +1205,7 @@ Run from the repo root (script in `/tmp`, not committed):
 node /tmp/a2-contracts/check.mjs
 ```
 
-Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc is traceable to TECHNICAL_DESIGN §5.2 **or** an accepted DEC-019 addition, and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented and the cloud→agent whitelist is exactly `[scheduleDue, revoked]`; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) sign-off table has all five rows ACCEPTED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping + current W2 control scope are documented; (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence; (q) cloud channel documents all 6 messages incl. `scheduleRunCancelled` as AGENT_TO_CLOUD; (r) `session.started.scheduleRunId` is documented (DEC-021/C-19); (s) C-14…C-20 are documented; (t) the W4 A2-review line is present. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 43/43).
+Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc is traceable to TECHNICAL_DESIGN §5.2 or an accepted W3/W5 addition (DEC-019, C-21/C-23/C-25), and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented and the cloud→agent whitelist is exactly `[scheduleDue, revoked]`; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) all role sign-offs plus the A2 W4/W5 review line are ACCEPTED/SIGNED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping is documented (W3 control handlers shipped); (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence; (q) cloud channel documents all 6 messages incl. `scheduleRunCancelled` as AGENT_TO_CLOUD; (r) `session.started.scheduleRunId` is documented (DEC-021/C-19); (s) C-14…C-25 are documented; (t) the W4/W5 A2-review lines are present; (u) `GET /users/me`, `unpair-all`, `unreadCount`, insights `weekly` and health `/health/db` are documented; (v) admin deltas C-25 (aliases, filters, self-demotion 409, agent-link https allowlist) are documented; (w) per-resource list orders are documented (§1.6) and the stale W2 control-scope sentence is gone. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 48/48).
 
 Script output (pasted from the actual run, 2026-11-10):
 
@@ -1110,13 +1218,13 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] cloud directions match CLOUD_MESSAGE_DIRECTIONS — 5/5 exact
 [PASS] INV-2: cloud→agent set is exactly [revoked, scheduleDue] — cloud→agent=[scheduleDue,revoked]
 [PASS] request schemas exported by shared and named in doc — 23/23 ok, notExported=[], notInDoc=[]
-[PASS] endpoint table matches the frozen 41-operation set — 43/43 documented, missing=[], invented=[]
-[PASS] every documented path is traceable to TECHNICAL_DESIGN §5.2 or DEC-019 — 43/43 traceable, adrMissing=[], unknown=[]
+[PASS] endpoint table matches the frozen 41-operation set — 46/46 documented, missing=[], invented=[]
+[PASS] every documented path is traceable to TECHNICAL_DESIGN §5.2, DEC-019 or W5 C-21/C-23/C-25 — 46/46 traceable, adrMissing=[], w5RefMissing=[], unknown=[]
 [PASS] Mongo collections 9/9 documented and present in TECHNICAL_DESIGN §4 — 9/9 ok, missing=[]
 [PASS] error codes 13/13 with matching HTTP status — 13/13 present, status mismatches=[]
 [PASS] invariants INV-1…INV-6 documented — 6/6 present, missing=[]
 [PASS] envelope v:1 and PROTOCOL_VERSION=1 referenced — PROTOCOL_VERSION=1, envelope example present
-[PASS] fenced JSON examples parse as valid JSON — 43/43 valid (≥20 required)
+[PASS] fenced JSON examples parse as valid JSON — 48/48 valid (≥20 required)
 [PASS] DEC-003 pairing-code rule documented + contract test present — doc §4.8 + shared/src/protocol.test.ts
 [PASS] DEC-013: full base URL, EdDSA attestation, seed identities documented — VITE_API_BASE_URL + AGENT_API_BASE_URL + EdDSA + admin@demo.com + Kabir@123
 [PASS] governance: requested-changes table, change process, 5 ACCEPTED sign-offs — 5 ACCEPTED, 0 PENDING sign-off rows
@@ -1132,7 +1240,13 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] contract decisions C-14…C-20 documented in §12 — 7/7 present, missing=[]
 [PASS] W4 additions recorded as A2-reviewed (§10/§6.2) — §10 + §6.2 present
 [PASS] schedule-run lifecycle C-19 documented (STARTED confirm/cancel/offline MISSED/stale 2 min) — dispatch→confirm→CANCELLED_BY_USER | offline MISSED | stale 2 min MISSED
-RESULT: 29/29 checks PASS
+[PASS] W5 additions C-21…C-24 documented (users/me, unreadCount, unpair-all, insights weekly + analytics choices) — endpoint rows #44/#45 + C-21…C-24 rows + §3.3 shapes
+[PASS] C-25 admin/health deltas documented (aliases, filters, self-demotion 409, https host allowlist, /health/db) — stats aliases + filters + CONFLICT + allowlist + readiness probe
+[PASS] control-message section updated to shipped W3 behaviour (no stale W2 scope) — §4.3 + C-13 agree
+[PASS] per-resource list orders documented in §1.6 (C-18/C-25) — schedules/notifications/presets/agent-links
+[PASS] §8 requested-changes records the real shipped-code drift (3 accepted rows) — health probes + admin API + list ordering
+[PASS] §10 A2 W4/W5 review sign-off recorded — SIGNED 2026-11-11 with evidence
+RESULT: 35/35 checks PASS
 $ echo $?
 0
 ```
@@ -1143,7 +1257,7 @@ $ echo $?
 
 ## 12. Clarifications and contract decisions (documented, no silent changes)
 
-These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016 and the W3/W4 additions DEC-017/DEC-019 (the schedule-run lifecycle is DEC-021 — A0 to append its ADR text to `docs/DECISIONS.md`). Items marked **ADR** need an ADR before implementation reaches them.
+These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016, the W3/W4 additions DEC-017/DEC-019/DEC-021 and the W5 additions C-21…C-25 (W5 gate DEC-024; admin deltas from the W6 shipped-code review). Items marked **ADR** need an ADR before implementation reaches them.
 
 | # | Topic | Decision / issue | Owner | Needs ADR |
 |---|---|---|---|---|
@@ -1159,14 +1273,19 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 | C-10 | MongoDB Memory Server dir | `MONGOMS_DOWNLOAD_DIR=<repo>/node_modules/.cache/mongodb-memory-server` on this dev machine (KI-006) — dev/test setup detail, **not** a wire-contract change. | A5/A9 | no |
 | C-11 | Local-channel close codes | An oversized frame (>16 KB, `ws` `maxPayload`) is closed by the `ws` library with **`1009`** (message too big); explicit protocol/policy violations use **`1008`**. The dashboard treats **both** as a disconnect (fail closed, reset handshake, reconnect with backoff). Documentation correction only — no behaviour change (DEC-015). | A7/A2 | no — DEC-015 |
 | C-12 | Pending enroll-poll status | **RESOLVED (documentation, W2).** `POST /agent/enroll/poll` returns `404 NOT_FOUND` while the device is registered but not yet owned/paired (`ownerId` null) **and** for a wrong/unknown `enrollSecret` (indistinguishable, no enumeration); `200` + token once paired with a matching secret; `410 PAIRING_EXPIRED` after the token was issued once (enrollment consumed). The Focus Agent treats `404`/`202`/`204`/`200`-without-token as pending and retries with backoff until the 10-min code TTL; `400/401/403/409/410` are terminal. Documented so a future server change cannot silently break pairing (§3.1 #38, §3.2, §5.1 step 5). Wording confirmed correct against shipped code by A0/A8 (2026-11-10). | A5/A7 | no — documentation |
-| C-13 | Local `auth` error mapping | **RESOLVED (documentation, W2).** A correctly signed attestation whose `sub` is another account → `authError{code:'FORBIDDEN'}`; every other failure (malformed, bad alg/signature, expired/over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unknown/unusable key, unpaired) → `authError{code:'UNAUTHENTICATED'}`. Pre-auth control frames → `focusRejected{code:'UNAUTHENTICATED'}` + close `1008`. Authenticated control messages (`enterFocus`/`exitFocus`/`listApps`) currently → `focusRejected{code:'INVALID'}` until W3 wires FocusController + REC-004 consent — **current W2 scope, not final contract** (§4.3). | A7 | no — documentation |
+| C-13 | Local `auth` error mapping | **RESOLVED (documentation, W2; W3 shipped).** A correctly signed attestation whose `sub` is another account → `authError{code:'FORBIDDEN'}`; every other failure (malformed, bad alg/signature, expired/over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unknown/unusable key, unpaired) → `authError{code:'UNAUTHENTICATED'}`. Pre-auth control frames → `focusRejected{code:'UNAUTHENTICATED'}` + close `1008`. Authenticated control messages are routed to the real W3 handlers (§4.3); `focusRejected{INVALID}` is only the defensive fallback when handlers are absent/unprocessable. | A7 | no — documentation |
 | C-14 | Pairing attempt latch scope | **ACCEPTED — DEC-017.** SEC-5's "≤5 attempts per code" is implemented as a latch of **5 failed guesses per authenticated user** within the 10-min code TTL (the server looks pending devices up by peppered digest, so a wrong guess cannot be attributed to one pending code): attempts 1–5 → `400 INVALID_PAIRING_CODE`, 6th+ → `410 PAIRING_EXPIRED` for that user/window; correct codes from other users are unaffected. Residual risk (many accounts) accepted and tracked for W6 `SECURITY_REVIEW.md`; strict per-code semantics would need a coarse code-prefix bucket counter (documented, not implemented). | A5/A9 | no — DEC-017 |
 | C-15 | `GET /sessions/active` | **ACCEPTED — DEC-019.** USER-scoped helper returning `{session: PublicSession\|null}` for the caller's current `ACTIVE` session (dashboard refresh after reload / local-link reconnect). Not in the original 41-operation TECHNICAL_DESIGN §5.2 table; uses only frozen response shapes (§3.1 #42). | A5/A4 | no — DEC-019 |
 | C-16 | `POST /allowlist/preset/:id` | **ACCEPTED — DEC-019.** Applies an admin preset to `userApps` with `?mode=merge\|replace` (default `merge`, strict server-validated enum); preset entries that are protected are filtered out and `protectedApps` is never modified (**INV-3**); `VALIDATION_ERROR` if the merge would exceed 50 user apps, `NOT_FOUND` for unknown preset (§3.1 #43). | A5/A4 | no — DEC-019 |
 | C-17 | Session list filters | **ACCEPTED — DEC-019.** `GET /sessions` filters stay exactly `page,limit,sort,search,from,to,status,source`; there is **no `deviceId` filter** (adding one would need a shared-schema change and no AC requires it). Clients must not send it. | A2/A4 | no — DEC-019 |
 | C-18 | Schedule ordering + session replay | **ACCEPTED — DEC-019.** `GET /schedules` is ordered `startTime asc, _id asc` (per-resource sort, not the generic `createdAt desc`). Replayed `POST /sessions` with the same `clientSessionId` and body returns **200** with the original session; the first create is **201**. Clients treat both as success. | A5/A4 | no — DEC-019 |
 | C-19 | Schedule-run lifecycle | **ACCEPTED — DEC-021 (ADR text pending in DECISIONS.md — A0).** Dispatch: server creates `scheduleRuns(STARTED)` and sends `scheduleDue`. Confirm: agent `session.started` with optional **`scheduleRunId`** links the session to the run (idempotent; same user/schedule/device). Cancel: agent sends new agent→cloud **`scheduleRunCancelled {runId, at}`** for a cancelled heads-up → run `CANCELLED_BY_USER`, no session. Offline at due time → `MISSED` + notification. Stale `STARTED` with no confirming `session.started` within **2 min** of `firedAt` → reaped to `MISSED` + notification. Cloud→agent whitelist unchanged (INV-2). | A5/A7 | yes — DEC-021 |
-| C-20 | `GET /agent/allowlist` | **ACCEPTED for W4.** Agent-facing, `Authorization: Bearer <deviceToken>` (not a user JWT); returns `{protectedApps, userApps, version}` so a scheduled start can use the current allow-list and detect version drift. Endpoint added by A5 in W4; already present in the frozen endpoint table (#39) — this records the response shape/auth. | A5/A7 | no |
+| C-20 | `GET /agent/allowlist` | **ACCEPTED for W4 (verified shipped in W6).** Agent-facing, `Authorization: Bearer <deviceToken>` (not a user JWT); returns `{protectedApps, userApps, version}` so a scheduled start can use the current allow-list and detect version drift. Already present in the frozen endpoint table (#39) — this records the response shape/auth. | A5/A7 | no |
+| C-21 | `GET /users/me` | **ACCEPTED (W5, verified shipped).** Authenticated (`auth` label — USER and ADMIN) alias of `/auth/me` returning the fresh public-user shape; used by settings/refresh flows. Additive, no schema change. | A4/A5 | no |
+| C-22 | Notifications `unreadCount` | **ACCEPTED (W5, verified shipped).** `GET /notifications` keeps the standard paginated envelope and adds `unreadCount` counted over ALL the caller's notifications (not the page); newest first (`createdAt desc, _id desc`); query remains `page`/`limit` only. `PATCH /notifications/:id/read` stays idempotent (first `readAt` wins). | A5/A4 | no |
+| C-23 | `POST /devices/unpair-all` | **ACCEPTED (W5, verified shipped).** USER-scoped, no body, 200 `{unpaired:number}`. For each device the `revoked` frame is pushed first (agent restores + IDLE, INV-5), then the row/token hash is deleted; offline devices are still revoked; zero devices → `{unpaired:0}` (FR-029). | A5/A4 | no |
+| C-24 | Insights `weekly` + analytics choices | **ACCEPTED (W5, verified shipped).** Additive optional `weekly:[{weekStart, minutes}]` present only for `30d`/`90d` (Monday-start `YYYY-MM-DD`). Documented choices: `daily` is always the last 7 local days regardless of range; minutes are COMPLETED-only (ACTIVE/CANCELLED excluded — FR-028); completionRate = COMPLETED÷(COMPLETED+CANCELLED) rounded 3dp, 0 when none; streaks are all-time COMPLETED days with ≥10 min anchored today/yesterday; bestHours = top-3 local hours in the range; all bucketing uses the user's IANA timezone via `Intl` (DST-correct). | A5/A4 | no |
+| C-25 | Admin/health shipped deltas | **ACCEPTED (shipped-code review, W6 — documented, no wire change).** (1) `GET /admin/stats` = 7 canonical keys + four additive aliases `{totalUsers,totalSessions,totalFocusMinutes,devicesConnected}`; `connectedDevices` counts `CONNECTED` or `FOCUSING`; `focusMinutes` = Σ `actualMinutes` over all sessions rounded 0.1. (2) `GET /admin/users` adds strict `role`/`isActive` filters (server-side extension of the frozen schema). (3) `PATCH /admin/users/:id` self-deactivation **and** self-demotion → `409 CONFLICT`. (4) Agent-link create/update URLs must be absolute https on `github.com`/`objects.githubusercontent.com`, no credentials (`400 VALIDATION_ERROR`, `details[{path:'url'}]`). (5) `GET /health/db` readiness probe (503 `INTERNAL` while mongoose disconnected; `/health` is also aliased at the process root). (6) Per-resource list orders fixed in §1.6. | A2/A5 | no — documented |
 
 ---
 
@@ -1178,4 +1297,5 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 - W2 documentation pass b (branch `feat/a2-contracts-w2b`, this file only): `docs(contracts): document pending enroll-poll, auth errors and node:crypto EdDSA` — C-12 pending enroll-poll (§3.1 #38, §3.2, §5.1), C-13 auth/authError mapping + current W2 scope (§4.3, §12), DEC-016 implementation note (§1.11, §4.4, §5.2, §6.1, §12 C-09), W2 merged-status line (§0, §10), delta notes C-14. No code, schema or wire changes.
 - Post-W2 documentation pass c (branch `feat/a2-contracts-c05`, this file only): `docs(contracts): fix C-05 auth error vocabulary and record A8 sign-off` — C-05 rewritten to reference C-13 (§4.3/§4.5/§12 agree, `NOT_PAIRED` is `focusRejected` only), A8 sign-off recorded in §10 (all five rows ACCEPTED), header/§13 status updated. No code, schema or wire changes.
 - W4 contract pass (branch `feat/a2-w4-contracts`): `feat(shared): add schedule-run lifecycle message and document W3/W4 contracts` — `shared/src/protocol.ts` adds optional `session.started.scheduleRunId` + new agent→cloud `scheduleRunCancelled`; this doc records C-14…C-20 (§1.6, §3.1, §3.2, §4.5, §5.3, §5.4, §5.5, §6.2, §10, §12). No other package touched.
-- Open: A0 to append the DEC-021 ADR text to `docs/DECISIONS.md`; C-04 typed response schemas in `contracts-v1.1` (DEC-015); A8 W4 integration re-check of C-14…C-20.
+- W6 contract pass (branch `feat/a2-w6-contracts`): `docs(contracts): fold in W5 contracts and review shipped endpoints` — C-21…C-25 folded in and verified against shipped code; §8 records three accepted contract-surface deltas (health probes, admin API, list ordering); §10 adds the A2 W4/W5 review line; endpoint table 43 → 46; §11 counts updated (46 endpoints, 48 JSON examples). No source/shared edits.
+- Open: C-04 typed response schemas in `contracts-v1.1` (DEC-015); F-102…F-113 UX polish (A4, W6); W6 security/release gates (A9/A10).
