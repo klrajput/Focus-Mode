@@ -1,0 +1,24 @@
+# Cross-platform line endings (root tooling config — owner A10, A0 hotfix on CI run 42824099611).
+#
+# Every text file is stored and checked out with LF, so Prettier, ESLint, git diff and the
+# CI format:check step behave identically on Windows, macOS and Linux. Without this, the
+# Windows runner checks out CRLF (core.autocrlf=true) and `prettier --check` flags every file.
+* text=auto eol=lf
+
+# Binary assets must never be text-normalised.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.dmg binary
+*.exe binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# The agent journal and build artefacts are local, never committed (also in .gitignore).
+*.tmp.bak binary
