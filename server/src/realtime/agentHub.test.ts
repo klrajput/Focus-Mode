@@ -432,6 +432,9 @@ describe('presence teardown', () => {
     client.socket.close(1000, 'test done');
 
     await waitFor(async () => (await readDevice(deviceId)).status === 'DISCONNECTED');
+    // The DB status write and the in-memory presence teardown are both async and may land in
+    // either order on a loaded runner (macOS CI flake) — wait for presence removal explicitly.
+    await waitFor(() => getPresence(deviceId) === null);
     expect(getPresence(deviceId)).toBeNull();
     expect(isDeviceConnected(deviceId)).toBe(false);
   });

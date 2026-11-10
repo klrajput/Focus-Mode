@@ -18,6 +18,7 @@ import {
   API_HEALTH_URL,
   API_BASE_URL,
   CLIENT_ORIGIN,
+  E2E_AGENT_PORT,
   E2E_CLIENT_PORT,
   E2E_TIMEOUTS,
 } from './e2e/helpers/config';
@@ -66,11 +67,17 @@ export default defineConfig({
     },
     {
       // Real dashboard dev server, pointed at the E2E API (Vite inlines VITE_* at startup).
+      // The agent-link port is pinned to the E2E agent's port with a 1-port range, so the dashboard's
+      // port scan can only find the agent this harness launched — never a developer's 4545 agent.
       command: `npm run dev --workspace @focus-mode/client -- --host 127.0.0.1 --port ${E2E_CLIENT_PORT} --strictPort`,
       url: `${CLIENT_ORIGIN}/login`,
       timeout: E2E_TIMEOUTS.webServerStartMs,
       reuseExistingServer: !isCI,
-      env: serverEnv({ VITE_API_BASE_URL: API_BASE_URL }),
+      env: serverEnv({
+        VITE_API_BASE_URL: API_BASE_URL,
+        VITE_AGENT_PORT: String(E2E_AGENT_PORT),
+        VITE_AGENT_PORT_RANGE: '1',
+      }),
       stdout: 'ignore',
       stderr: 'pipe',
     },
