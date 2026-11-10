@@ -1,0 +1,269 @@
+# RELEASING.md — Focus Agent build & release runbook
+
+Owner: **A10 (Release & CI)** · Plan items: **T-110** (`agent/electron-builder.yml` + `agent/build/`),
+**T-112** (`.github/workflows/release.yml`), **T-114** (signing/notarisation runbook).
+Last updated: 2026-11-10.
+
+> **Hard rule:** tags are pushed **only by the human maintainer**. AI workers never run `git`
+> (no branch, tag, commit or push commands) — they prepare the files and hand them to A0.
+> Release artifacts are **unsigned by default**; every workflow path must pass without signing
+> secrets. Signing/notarisation is optional and needs the secrets listed in §5.
+
+---
+
+## 1. Scope
+
+This document covers packaging the **Focus Agent** (the Electron desktop app) and publishing its
+installers. It does **not** cover the dashboard (Vercel) or API (Render/Railway) deployments — see
+`docs/PLATFORMS.md` / the deployment section of the README once written.
+
+Two files define the whole pipeline:
+
+| File | What it does |
+|---|---|
+| `agent/electron-builder.yml` | Targets per OS, artifact names, NSIS/dmg/deb options, `asarUnpack` for `koffi`, draft-publish metadata, optional signing/entitlements. |
+| `.github/workflows/release.yml` | Runs one native runner per OS, builds installers with `--publish never`, uploads workflow artifacts, and creates a **draft** GitHub Release on tag pushes only. |
+
+`electron-updater` is **not** installed and no update feed is consumed (auto-update is P2). The
+GitHub `publish` block in `electron-builder.yml` exists only to declare the provider and
+`releaseType: draft` — the workflow uploads with `gh release create`, never `electron-builder --publish`.
+
+Two practical consequences of that block:
+
+- `publish.owner` / `publish.repo` are **hard-coded** to the submission repository
+  (`klrajput/Focus-Mode`) because electron-builder cannot infer them from `.git/config` in this
+  npm-workspaces layout (`projectDir` is `agent/`); a `github` publish config without owner/repo
+  resolves to `null` and crashes its update-info builder. Update both values if the repo is
+  renamed/forked.
+- With `--publish never` electron-builder still writes `latest*.yml` update-info files next to the
+  installers and an `app-update.yml` inside `Contents/Resources/`. They are **not** uploaded (upload
+  patterns are installer extensions only) and nothing reads them, because no updater ships.
+
+---
+
+## 2. What gets built (artifact matrix)
+
+`${version}` comes from `agent/package.json` (currently `0.1.0`); `${arch}` is the runner arch.
+
+| OS | Runner (GitHub Actions) | Targets | Artifact file pattern | Notes |
+|---|---|---|---|---|
+| Windows x64 | `windows-latest` | `nsis`, `portable` | `focus-mode-agent-<ver>-win-setup.exe`, `focus-mode-agent-<ver>-win-portable.exe` | Per-user install, **no admin** (`perMachine: false`, `allowElevation: false`), uninstaller included; app data (journal/settings) kept on uninstall (`deleteAppDataOnUninstall: false`). |
+| macOS arm64 | `macos-latest` (Apple Silicon) | `dmg`, `zip` | `focus-mode-agent-<ver>-mac-arm64.dmg`, `…-mac-arm64.zip` | `NSAppleEventsUsageDescription` set for the JXA fallback. |
+| macOS x64 | `macos-15-intel` | `dmg`, `zip` | `focus-mode-agent-<ver>-mac-x64.dmg`, `…-mac-x64.zip` | `macos-13` is retired — never use it. Intel runners are planned to retire fall 2027 (§8). |
+| Linux x64 | `ubuntu-24.04` | `AppImage`, `deb` | `focus-mode-agent-<ver>-linux-x64.AppImage`, `…-linux-x64.deb` | `rpm` is **optional and not built** (needs `rpm` tooling on the runner). |
+
+Workflow artifact bundles are named `focus-agent-<name>` (`windows-x64`, `macos-arm64`,
+`macos-x64`, `linux-x64`, retention 14 days). The draft release receives the installers plus a
+generated `SHA256SUMS.txt`.
+
+Bundle id / product name: `com.focusmode.agent` / **Focus Mode Agent**.
+
+macOS architecture is chosen **per runner** in `release.yml` (`--arm64` on `macos-latest`, `--x64` on
+`macos-15-intel`) and deliberately **not** pinned as an `arch` list in `electron-builder.yml`: an arch
+list there makes electron-builder build both architectures on *every* macOS runner, duplicating the
+artifacts (and breaking the draft release with duplicate asset names).
+
+---
+
+## 3. Release process (maintainer)
+
+### 3.1 Pre-flight checklist
+
+1. `main` CI green (`.github/workflows/ci.yml` matrix on 3 OSes, gitleaks, CodeQL).
+2. Version bumped in `agent/package.json` (`0.1.0` → `0.1.1`, etc.). The git tag **must** match:
+   `v<same version>`. Tag and package version drift makes artifact names misleading.
+3. Release notes drafted (user-visible changes, known issues from `docs/KNOWN_ISSUES.md`).
+4. Human OS checks for the version being shipped: T-100 (Windows) and/or T-101 (macOS) checklist
+   evidence exists. **Compiling does not prove real window management works.**
+5. Only then: create and push the annotated tag (maintainer, from a clean `main`):
+
+   ```sh
+   git checkout main
+   git pull --ff-only
+   git tag -a v0.1.1 -m "Focus Mode Agent v0.1.1"
+   git push origin v0.1.1
+   ```
+
+### 3.2 What runs automatically
+
+`push` of a `v*` tag starts `.github/workflows/release.yml`:
+
+1. `build` — 4 jobs in parallel (one per OS/arch). Each: checkout → Node 22 (npm cache) →
+   `npm ci` → build `shared` → build `agent` → `npx electron-builder <targets> --publish never` →
+   upload installers as workflow artifacts.
+2. `smoke` — **currently disabled** (`if: false`). It is the T-113 job: launch each packaged app with
+   `AGENT_SMOKE=1`, expect it to start headless, bind the loopback port, answer one `hello` and exit 0.
+   It cannot be enabled until the `AGENT_SMOKE` hook exists in `agent/src/main.ts` (§8) — enabling it
+   earlier would either hang on a GUI or fake a pass.
+3. `release` — tag pushes only: downloads all artifacts, generates `SHA256SUMS.txt`, creates a
+   **draft** GitHub Release with `gh release create --draft`. `workflow_dispatch` runs skip this job
+   (build-only dry run).
+
+### 3.3 Dry run without releasing
+
+Actions → **Release** → *Run workflow* (`workflow_dispatch`) on any branch. All four build jobs run
+and upload artifacts; the release job is skipped. Use this to validate packaging changes before
+tagging.
+
+### 3.4 Publish
+
+1. Open the draft release, check assets + `SHA256SUMS.txt` against the local downloads.
+2. Run the manual launch checklist (install, pair window opens, quit works) on real hardware.
+3. Edit notes if needed, then **Publish release**.
+4. Never move/re-push a published tag: ship a new patch version instead.
+5. `docs/AGENT_STATUS.md` / wave gate: record the release URL, artifact hashes and OS verification
+   status (`NEEDS-HUMAN` until T-102 evidence exists).
+
+---
+
+## 4. Local packaging (developer dry run)
+
+Always build `shared` first — the agent imports `@focus-mode/shared`, whose `dist/` must exist:
+
+```sh
+npm run build --workspace shared
+npm run build --workspace agent
+```
+
+Then, from `agent/`:
+
+```sh
+npx electron-builder --mac --dir --publish never      # macOS .app directory, no installers
+npx electron-builder --mac --arm64 --publish never    # dmg + zip
+npx electron-builder --win --x64 --publish never      # NSIS + portable (needs Windows for full fidelity)
+npx electron-builder --linux --x64 --publish never    # AppImage + deb (needs Linux for full fidelity)
+```
+
+Notes for this shared sandbox machine:
+
+- `ELECTRON_BUILDER_CACHE=$PWD/.npmcache/electron-builder-cache` keeps electron-builder's cache inside
+  the workspace (`~/Library/Caches` is not writable under the file sandbox).
+- `CSC_IDENTITY_AUTO_DISCOVERY=false` avoids picking up stray local certificates for an unsigned test.
+- `-c.electronDownload.cache=$PWD/../.npmcache/electron-cache` reuses the Electron zip already fetched
+  by `node node_modules/electron/install.js` — without it the download stage tries to write
+  `~/Library/Caches/electron` and fails with `EPERM` in this sandbox.
+- `--dir` (app directory only) is the fastest packaging check. `hdiutil`-based `dmg` creation can be
+  blocked by the sandbox (`hdiutil: create failed - Operation not permitted`) — that is an environment
+  limit, not a config error; the macOS CI runner produces the dmg normally.
+- Cross-OS builds are **not** equivalent to native builds; only the CI matrix produces the real
+  Windows/Linux artifacts.
+
+---
+
+## 5. Signing & notarisation (optional)
+
+Signing is entirely **secret-gated**: with no secrets the workflow passes and produces unsigned
+artifacts. The same two variables work on Windows and macOS:
+
+| Variable | Platform | Meaning |
+|---|---|---|
+| `CSC_LINK` | Windows + macOS | Base64 of the certificate file (`.pfx` for Windows, `.p12` for macOS), or a URL/path electron-builder accepts. |
+| `CSC_KEY_PASSWORD` | Windows + macOS | Password of that certificate. |
+| `APPLE_ID` | macOS only | Apple ID used by `@electron/notarize`. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | macOS only | App-specific password for that Apple ID. |
+| `APPLE_TEAM_ID` | macOS only | Apple Developer team id. |
+
+Add them under **Repo → Settings → Secrets and variables → Actions**. Never commit
+certificates/keys; `.gitignore` covers `.env*`, and the PR gitleaks job catches accidental secrets.
+The workflow passes them only as step env vars, so they do not leak into logs or artifacts.
+
+- **Windows**: an OV/EV code-signing certificate is required to avoid SmartScreen "unknown publisher".
+  Without it the NSIS/portable exes are unsigned (§6.1).
+- **macOS**: signing needs a *Developer ID Application* certificate, notarisation additionally needs
+  the three `APPLE_*` values. electron-builder runs `@electron/notarize` automatically when those are
+  present (no `mac.notarize: false` override in the config). Set `CSC_*` and `APPLE_*` **together** or
+  neither: with `APPLE_*` set but no signing identity, notarisation fails because the app is unsigned.
+  Hardened runtime and the entitlements in `agent/build/entitlements.mac.plist` are applied **only
+  when a signing identity exists** — an unsigned build skips codesign entirely.
+- Verify a signed/notarised mac build:
+
+  ```sh
+  codesign --verify --deep --strict --verbose=2 "Focus Mode Agent.app"
+  spctl --assess --type execute --verbose "Focus Mode Agent.app"
+  xcrun stapler validate "focus-mode-agent-<ver>-mac-arm64.dmg"
+  ```
+
+- **Linux**: no signing required. Optional GPG signing of the AppImage is out of scope (P2).
+
+Signing/notarisation itself is **NEEDS-HUMAN** in this environment: no certificates and no Apple
+Developer account are available in the sandbox, so only the unsigned path is exercised.
+
+---
+
+## 6. Installing unsigned builds (user-facing)
+
+Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden.
+
+### 6.1 Windows (NSIS `.exe` / portable)
+
+1. SmartScreen shows **"Windows protected your PC"** → *More info* → *Run anyway*
+   (publisher appears as "Unknown publisher" until signing is enabled).
+2. NSIS installs per-user (no admin prompt) and adds Start-menu/desktop shortcuts; the portable exe
+   runs directly.
+3. Uninstalling keeps app data (journal/settings) by design; delete
+   `%APPDATA%\Focus Mode Agent` manually for a full reset.
+
+### 6.2 macOS (`.dmg` / `.zip`)
+
+1. Open the dmg, drag **Focus Mode Agent** to *Applications*.
+2. First launch: **right-click the app → Open** (or try to open once, then *System Settings →
+   Privacy & Security → Open Anyway*).
+3. If the zip was downloaded and quarantined, you can clear the attribute explicitly:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Focus Mode Agent.app"
+   ```
+
+4. The agent asks for **Automation / Apple Events** permission only if the JXA fallback is used
+   (the explanation string ships in `NSAppleEventsUsageDescription`); denying it means the agent
+   reports it cannot enforce focus rather than silently failing.
+5. macOS arm64/x64 installers are produced on the CI matrix; **both need real-desktop verification**
+   (T-101/T-102) before a release is called "verified".
+
+### 6.3 Linux
+
+- AppImage: `chmod +x focus-mode-agent-<ver>-linux-x64.AppImage && ./focus-mode-agent-<ver>-linux-x64.AppImage`
+  (on systems without FUSE use `--appimage-extract` and run `squashfs-root/AppRun`).
+- deb: `sudo apt install ./focus-mode-agent-<ver>-linux-x64.deb` (apt resolves the Electron runtime deps;
+  `dpkg -i` works but may leave dependencies unmet).
+- Window-aside works on X11 only; Wayland reports `capabilities.focus = "unsupported"` (product
+  limitation documented in `docs/PLATFORMS.md`).
+
+---
+
+## 7. Rollback / recovery
+
+- A draft release can be deleted safely and the workflow re-run (same tag) after the fix.
+- A **published** release should be fixed forward with a new patch tag; never rewrite a public tag.
+- If a build job fails after uploads, artifacts remain attached to the workflow run for debugging
+  (14-day retention); the draft release is only created when `release` runs.
+- If signing secrets are wrong, remove/fix them and re-run the job — the pipeline still succeeds
+  unsigned when secrets are absent, so a broken secret must be treated as a CI failure to fix, not
+  worked around.
+
+---
+
+## 8. Known gaps / current limitations
+
+| Item | Status | Notes |
+|---|---|---|
+| `AGENT_SMOKE=1` launch hook (T-113) | **BLOCKED** | No hook in `agent/src/main.ts` as of 2026-11-10 (verified by grep). Needed contract: headless start, bind `127.0.0.1:AGENT_PORT`, answer one `hello`, `app.exit(0)`; non-zero exit otherwise. `smoke` job is present but `if: false`. |
+| Auto-update | Not implemented (P2) | No `electron-updater`, no `latest.yml`/blockmap feed. |
+| `rpm` | Not built | Optional; would need `rpm` tools on the Ubuntu runner. |
+| macOS Intel runner | Deprecated eventually | `macos-15-intel` retires fall 2027 (TD §16) — plan universal build or drop x64 via an ADR before then. |
+| Signing / notarisation | NEEDS-HUMAN | No certificates in this environment; unsigned path only is CI-exercised. |
+| Real install/launch smoke on each OS | NEEDS-HUMAN (T-113/T-102) | Draft release stays draft until a human runs the launch checklist. |
+| `author` missing in `agent/package.json` | Warning only | electron-builder logs `author is missed in the package.json`. macOS/Windows targets are unaffected; `deb` uses `linux.maintainer`. Adding `author` is A7's file (`agent/package.json`) — cosmetic. |
+| `@focus-mode/shared` `.map`/`.d.ts` inside asar | Low | electron-builder ships the dependency's whole `dist/` (maps/declarations included, a few KB). Harmless; can be trimmed later with an `onNodeModuleFile` hook. |
+| Linux Wayland window-aside | Product limitation | X11 works; Wayland reports unsupported capability. |
+
+---
+
+## 9. Ownership & change control
+
+- `agent/electron-builder.yml`, `.github/workflows/release.yml`, `agent/build/**`, `docs/RELEASING.md`
+  are A10-owned; review with A7 for agent-runtime impact and A0 for release policy.
+- Changing `appId`, `productName`, targets or artifact naming is a release-visible change: document it
+  in the commit and, when it affects users (e.g. appId changes userData path), log an ADR in
+  `docs/DECISIONS.md`.
+- The `publish` block must stay `releaseType: draft`; auto-publishing on tag push is not allowed.
