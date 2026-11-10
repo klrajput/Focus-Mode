@@ -26,6 +26,8 @@ import { WebSocket } from 'ws';
 import {
   LINK_PATH,
   LinkServer,
+  MAX_CONNECTIONS,
+  MAX_MESSAGES_PER_SECOND,
   MAX_PAYLOAD_BYTES,
   type LinkAddress,
   type LinkServerOptions,
@@ -419,16 +421,36 @@ describe('LinkServer messages', () => {
     await expect(client.closed).resolves.toMatchObject({ code: 1008 });
   });
 
-  it('closes an oversized frame with 1009', async () => {
+  it('pins the contract limits (16 KB frame, 3 connections, 20 msg/s)', () => {
+    expect(MAX_PAYLOAD_BYTES).toBe(16 * 1024);
+    expect(MAX_CONNECTIONS).toBe(3);
+    expect(MAX_MESSAGES_PER_SECOND).toBe(20);
+  });
+
+  it('closes a frame one byte over the 16 KB limit with 1009', async () => {
     const { address } = await startLink();
     const client = await connect(address.port);
     await client.next();
 
-    client.socket.send('x'.repeat(MAX_PAYLOAD_BYTES + 1024));
+    // Exactly 16 KB + 1 byte, not a wildly larger frame: proves the boundary itself.
+    client.socket.send('x'.repeat(MAX_PAYLOAD_BYTES + 1));
     await expect(client.closed).resolves.toMatchObject({ code: 1009 });
   });
 
-  it('closes a flooding socket with 1008 (rate limit)', async () => {
+  it('closes a flooding socket with 1008 at the real default 20 msg/s', async () => {
+    const { address } = await startLink();
+    const client = await connect(address.port);
+    await client.next();
+
+    // 21 frames in one synchronous burst is over the default limit; the server must close the
+    // socket rather than answer an unbounded number of frames (NFR-010).
+    for (let index = 0; index <= MAX_MESSAGES_PER_SECOND; index += 1) {
+      client.socket.send(JSON.stringify({ v: 1, id: `d-flood-${index}`, type: 'getState' }));
+    }
+    await expect(client.closed).resolves.toMatchObject({ code: 1008 });
+  });
+
+  it('closes a socket with a configured lower rate limit with 1008', async () => {
     const { address } = await startLink({ maxMessagesPerSecond: 3 });
     const client = await connect(address.port);
     await client.next();
@@ -542,5 +564,71 @@ describe('pairing transitions (KI-010 agent half, FR-004)', () => {
 
     server.notifyUnpaired();
     await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'UNPAIRED' });
+  });
+
+  it('policy-closes an authenticated socket when the pairing changed (re-attestation)', async () => {
+    let binding = { deviceId: DEVICE_ID, userId: USER_ID };
+    const { server, address } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: true }),
+      verifyAttestation: async () => ({
+        ok: true,
+        deviceId: DEVICE_ID,
+        userId: USER_ID,
+        expiresAt: new Date(),
+      }),
+    });
+
+    const client = await connect(address.port);
+    helloMessageSchema.parse(await client.next());
+    challengeMessageSchema.parse(await client.next());
+    client.socket.send(
+      JSON.stringify({ v: 1, id: 'd-auth', type: 'auth', attestation: 'x'.repeat(40) }),
+    );
+    expect(authOkMessageSchema.parse(await client.next()).type).toBe('authOk');
+
+    // Re-pair to a different device/account while the dashboard is still attached: the old
+    // attestation is stale authority, so the socket must re-handshake (T-080).
+    binding = { deviceId: '507f1f77bcf86cd799439099', userId: USER_ID };
+    server.refreshPairing();
+    await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'PAIRING_CHANGED' });
+  });
+
+  it('refuses control on a stale attested socket even before refreshPairing runs', async () => {
+    let binding = { deviceId: DEVICE_ID, userId: USER_ID };
+    const { address } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ ...SNAPSHOT, paired: true }),
+      verifyAttestation: async () => ({
+        ok: true,
+        deviceId: DEVICE_ID,
+        userId: USER_ID,
+        expiresAt: new Date(),
+      }),
+    });
+
+    const client = await connect(address.port);
+    helloMessageSchema.parse(await client.next());
+    challengeMessageSchema.parse(await client.next());
+    client.socket.send(
+      JSON.stringify({ v: 1, id: 'd-auth', type: 'auth', attestation: 'x'.repeat(40) }),
+    );
+    expect(authOkMessageSchema.parse(await client.next()).type).toBe('authOk');
+
+    binding = { deviceId: '507f1f77bcf86cd799439099', userId: USER_ID };
+    client.socket.send(
+      JSON.stringify({
+        v: 1,
+        id: 'd-enter',
+        type: 'enterFocus',
+        durationMin: 25,
+        allowList: [],
+        consent: { acceptedAt: '2026-11-10T10:00:00.000Z', version: 'consent-v1' },
+        clientSessionId: SESSION_ID,
+      }),
+    );
+    const rejection = focusRejectedMessageSchema.parse(await client.next());
+    expect(rejection.code).toBe('UNAUTHENTICATED');
+    await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'STALE_ATTESTATION' });
   });
 });

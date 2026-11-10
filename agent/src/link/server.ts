@@ -66,6 +66,20 @@ interface ConnectionState {
   /** Outstanding single-use challenge nonce; null after use (or while unpaired). */
   nonce: string | null;
   authenticated: boolean;
+  /**
+   * True while an `auth` frame is being verified. A second concurrent auth frame is a protocol
+   * error (one challenge → at most one attempt), not a second lottery ticket (T-080).
+   */
+  authInFlight: boolean;
+  /** Device/owner this socket's attestation was verified for; null until `authOk`. */
+  deviceId: string | null;
+  userId: string | null;
+  /**
+   * Bumped whenever the authenticated surface of this socket is invalidated (unpair, re-pair,
+   * duplicate auth, disconnect). Async work captures it before awaiting and drops its result
+   * instead of answering a socket whose authority has changed (T-080 stale-socket guard).
+   */
+  generation: number;
 }
 
 export interface LinkServerOptions {
@@ -288,13 +302,27 @@ export class LinkServer {
    * connected. Those sockets got an unpaired `hello` and no challenge, so a fresh `hello` (now
    * `paired: true`) and a fresh single-use `challenge` are re-issued on every unauthenticated
    * socket — the dashboard can re-handshake without a page reload (KI-010 agent half, FR-004).
-   * Authenticated sockets are untouched: their attestation is still valid.
+   *
+   * T-080: an authenticated socket is kept only when its attestation is still bound to the
+   * *current* device/owner. If the pairing changed (re-pair to another account/device) the old
+   * attestation is stale, so the socket is policy-closed and must re-handshake — re-attestation
+   * after a pairing change is mandatory, never optional.
    */
   refreshPairing(): void {
     const binding = this.#pairing();
-    if (binding === null) return;
     for (const [socket, state] of this.#connections) {
-      if (state.authenticated) continue;
+      if (state.authenticated) {
+        if (
+          binding === null ||
+          binding.deviceId !== state.deviceId ||
+          binding.userId !== state.userId
+        ) {
+          this.#logger.warn('Closing a dashboard link whose attestation predates a pairing change');
+          this.#invalidateAuthentication(socket, state, 'PAIRING_CHANGED');
+        }
+        continue;
+      }
+      if (binding === null || state.authInFlight) continue;
       // hello first: it is what tells the dashboard the pairing state actually changed.
       this.#send(socket, buildHello(this.#options.getSnapshot(), this.#options.identity));
       this.#issueChallenge(socket, state);
@@ -315,9 +343,7 @@ export class LinkServer {
       sockets: this.#connections.size,
     });
     for (const [socket, state] of this.#connections) {
-      state.authenticated = false;
-      state.nonce = null;
-      if (socket.readyState === WebSocket.OPEN) socket.close(1008, reason);
+      this.#invalidateAuthentication(socket, state, reason);
     }
   }
 
@@ -340,6 +366,31 @@ export class LinkServer {
 
   #pairing(): AttestationBinding | null {
     return this.#options.getPairing?.() ?? null;
+  }
+
+  /** True only when this socket's verified attestation still matches the live pairing. */
+  #isCurrentBinding(state: ConnectionState): boolean {
+    const binding = this.#pairing();
+    return (
+      binding !== null &&
+      state.authenticated &&
+      binding.deviceId === state.deviceId &&
+      binding.userId === state.userId
+    );
+  }
+
+  /**
+   * Drops every authority this socket had and closes it. Bumping `generation` makes any in-flight
+   * attestation/control promise discard its result instead of answering a stale socket (T-080).
+   */
+  #invalidateAuthentication(socket: WebSocket, state: ConnectionState, reason: string): void {
+    state.authenticated = false;
+    state.nonce = null;
+    state.authInFlight = false;
+    state.deviceId = null;
+    state.userId = null;
+    state.generation += 1;
+    if (socket.readyState === WebSocket.OPEN) socket.close(1008, reason);
   }
 
   #issueChallenge(socket: WebSocket, state: ConnectionState): void {
@@ -402,13 +453,28 @@ export class LinkServer {
   }
 
   #handleConnection(socket: WebSocket): void {
-    const state: ConnectionState = { nonce: null, authenticated: false };
+    const state: ConnectionState = {
+      nonce: null,
+      authenticated: false,
+      authInFlight: false,
+      deviceId: null,
+      userId: null,
+      generation: 0,
+    };
     this.#connections.set(socket, state);
     this.#rateWindows.set(socket, []);
     socket.on('message', (data, isBinary) => {
       this.#handleMessage(socket, data, isBinary);
     });
     socket.on('close', () => {
+      // A closed socket can never answer anything: invalidate first so an in-flight verifier or
+      // control handler cannot send after the close (T-080 disconnect mid-focus).
+      state.generation += 1;
+      state.authenticated = false;
+      state.nonce = null;
+      state.authInFlight = false;
+      state.deviceId = null;
+      state.userId = null;
       this.#connections.delete(socket);
       this.#rateWindows.delete(socket);
     });
@@ -482,7 +548,7 @@ export class LinkServer {
             'Attest this dashboard link before sending focus control messages.',
           ),
         );
-        socket.close(1008, 'UNAUTHENTICATED');
+        this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
         return;
       }
       this.#rejectAndClose(
@@ -490,6 +556,24 @@ export class LinkServer {
         ERROR_CODES.UNAUTHENTICATED,
         'Attestation required before this message',
       );
+      return;
+    }
+
+    // T-080: a socket authenticated against a previous pairing is stale. Control messages are
+    // refused (the device token that backed its attestation no longer exists) and the socket is
+    // policy-closed so the dashboard performs a fresh handshake and re-attestation.
+    if (CONTROL_MESSAGE_TYPES.has(message.type) && !this.#isCurrentBinding(state)) {
+      this.#logger.warn('Refused a control message on a stale attested socket', {
+        type: message.type,
+      });
+      this.#send(
+        socket,
+        buildFocusRejected(
+          'UNAUTHENTICATED',
+          'This dashboard link must attest again before sending focus control messages.',
+        ),
+      );
+      this.#invalidateAuthentication(socket, state, 'STALE_ATTESTATION');
       return;
     }
 
@@ -545,8 +629,10 @@ export class LinkServer {
     type: LocalMessageType,
     pending: Promise<readonly LocalMessage[]>,
   ): void {
+    const generation = this.#connections.get(socket)?.generation ?? -1;
     void pending
       .then((messages) => {
+        if (!this.#replyStillAuthorised(socket, generation)) return;
         for (const message of messages) this.#send(socket, message);
         this.#options.onMessageHandled?.(type);
       })
@@ -555,6 +641,7 @@ export class LinkServer {
           'A local control handler rejected unexpectedly',
           error instanceof Error ? error.message : 'unknown error',
         );
+        if (!this.#replyStillAuthorised(socket, generation)) return;
         this.#send(
           socket,
           buildFocusRejected('INVALID', 'That focus request could not be processed.'),
@@ -564,8 +651,28 @@ export class LinkServer {
   }
 
   /**
+   * T-080: a slow control handler may finish after the socket closed, after the device was
+   * unpaired, or after a re-pair changed the binding. In every one of those cases the reply would
+   * be stale authority, so it is dropped instead of sent.
+   */
+  #replyStillAuthorised(socket: WebSocket, generation: number): boolean {
+    const state = this.#connections.get(socket);
+    if (state === undefined || state.generation !== generation || !this.#isCurrentBinding(state)) {
+      this.#logger.warn('Dropped a control reply for a stale dashboard link');
+      return false;
+    }
+    return socket.readyState === WebSocket.OPEN;
+  }
+
+  /**
    * Handshake steps 3–4. The nonce is consumed before verification (single use), the EdDSA JWT is
    * checked through the injected verifier, and a failure answers `authError` and closes.
+   *
+   * T-080 concurrency rules: exactly one verification may run per socket; a second `auth` frame
+   * while the first is in flight is rejected (and invalidates the first); a result that arrives
+   * after the socket closed, the device was unpaired or the pairing changed is dropped instead of
+   * granting authority. This is what makes "duplicate concurrent auth attempts" and "stale
+   * attestation after reconnect" fail closed.
    */
   async #handleAuth(socket: WebSocket, state: ConnectionState, token: string): Promise<void> {
     if (state.authenticated) {
@@ -577,7 +684,22 @@ export class LinkServer {
           'This dashboard link is already authenticated.',
         ),
       );
-      socket.close(1008, 'UNAUTHENTICATED');
+      this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
+      return;
+    }
+
+    if (state.authInFlight) {
+      // One challenge → one attempt. Invalidate the first attempt so two concurrent verifications
+      // can never both succeed and no late authOk can arrive on a socket we are closing.
+      this.#logger.warn('Rejected a concurrent auth frame on the same challenge');
+      this.#send(
+        socket,
+        buildAuthError(
+          ERROR_CODES.UNAUTHENTICATED,
+          'An attestation is already being verified for this dashboard link.',
+        ),
+      );
+      this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
       return;
     }
 
@@ -592,7 +714,7 @@ export class LinkServer {
           'No challenge is outstanding for this dashboard link.',
         ),
       );
-      socket.close(1008, 'UNAUTHENTICATED');
+      this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
       return;
     }
     // Single use: consume the nonce even if verification fails, so it can never be replayed.
@@ -608,11 +730,13 @@ export class LinkServer {
           'Attestation verification is not configured in this agent build.',
         ),
       );
-      socket.close(1008, 'UNAUTHENTICATED');
+      this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
       return;
     }
 
-    let result: AttestationVerification;
+    state.authInFlight = true;
+    const generation = state.generation;
+    let result: AttestationVerification | undefined;
     try {
       result = await verifier({ token, nonce });
     } catch (error) {
@@ -620,22 +744,53 @@ export class LinkServer {
         'Attestation verification failed unexpectedly',
         error instanceof Error ? error.message : 'unknown error',
       );
+    } finally {
+      state.authInFlight = false;
+    }
+
+    // The answer is only meaningful for the exact socket/pairing it was requested for.
+    if (state.generation !== generation || socket.readyState !== WebSocket.OPEN) {
+      this.#logger.warn('Dropped an attestation result for a socket that changed while verifying');
+      return;
+    }
+    if (result === undefined) {
       this.#send(
         socket,
         buildAuthError(ERROR_CODES.UNAUTHENTICATED, 'The attestation could not be verified.'),
       );
-      socket.close(1008, 'UNAUTHENTICATED');
+      this.#invalidateAuthentication(socket, state, 'UNAUTHENTICATED');
       return;
     }
 
     if (!result.ok) {
       this.#logger.warn('Rejected an attestation', { reason: result.reason });
       this.#send(socket, buildAuthError(result.code, result.message));
-      socket.close(1008, result.code);
+      this.#invalidateAuthentication(socket, state, result.code);
+      return;
+    }
+
+    // Re-check the live pairing: `revoked`/re-pair can land while the verifier awaits the key.
+    const binding = this.#pairing();
+    if (
+      binding === null ||
+      binding.deviceId !== result.deviceId ||
+      binding.userId !== result.userId
+    ) {
+      this.#logger.warn('Rejected an attestation whose pairing changed while verifying');
+      this.#send(
+        socket,
+        buildAuthError(
+          ERROR_CODES.UNAUTHENTICATED,
+          'The pairing changed while this attestation was verified; attest again.',
+        ),
+      );
+      this.#invalidateAuthentication(socket, state, 'PAIRING_CHANGED');
       return;
     }
 
     state.authenticated = true;
+    state.deviceId = result.deviceId;
+    state.userId = result.userId;
     this.#logger.info('Dashboard link authenticated', { deviceId: result.deviceId });
     this.#send(socket, buildAuthOk(result.deviceId, result.userId));
   }

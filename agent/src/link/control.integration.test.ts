@@ -61,6 +61,7 @@ const sockets: WebSocket[] = [];
 const controllers: FocusController[] = [];
 
 interface TestClient {
+  readonly socket: WebSocket;
   next(): Promise<unknown>;
   send(message: unknown): void;
   readonly closed: Promise<{ code: number; reason: string }>;
@@ -85,6 +86,7 @@ function connect(port: number): Promise<TestClient> {
   return new Promise((resolve, reject) => {
     socket.once('open', () => {
       resolve({
+        socket,
         closed,
         send: (message: unknown) => socket.send(JSON.stringify(message)),
         next: () =>
@@ -115,11 +117,20 @@ interface IntegrationHarness {
   readonly journal: FileJournal;
   readonly events: FocusLifecycleEvent[];
   start(options?: { readonly recoverFirst?: boolean }): Promise<LinkAddress>;
+  /** Simulates a process kill: no exitFocus, no journal clear, link and timers gone (T-080). */
+  crash(): Promise<void>;
 }
 
-async function makeIntegrationHarness(): Promise<IntegrationHarness> {
-  const driver = new FakeDriver(WINDOWS);
-  const journal = new FileJournal({ directory: makeDirectory() });
+interface SharedHarnessState {
+  readonly driver?: FakeDriver;
+  readonly journal?: FileJournal;
+}
+
+async function makeIntegrationHarness(
+  shared: SharedHarnessState = {},
+): Promise<IntegrationHarness> {
+  const driver = shared.driver ?? new FakeDriver(WINDOWS);
+  const journal = shared.journal ?? new FileJournal({ directory: makeDirectory() });
   const events: FocusLifecycleEvent[] = [];
   const link: { server?: LinkServer } = {};
 
@@ -189,6 +200,16 @@ async function makeIntegrationHarness(): Promise<IntegrationHarness> {
     start: async (startOptions = {}) => {
       if (startOptions.recoverFirst === true) await controller.recoverFromJournal();
       return server.start();
+    },
+    crash: async () => {
+      // A real crash leaves the journal and the moved windows behind. Remove this harness from
+      // the cleanup lists so afterEach does not restore them for us.
+      const controllerIndex = controllers.indexOf(controller);
+      if (controllerIndex >= 0) controllers.splice(controllerIndex, 1);
+      const serverIndex = servers.indexOf(server);
+      if (serverIndex >= 0) servers.splice(serverIndex, 1);
+      controller.dispose();
+      await server.stop();
     },
   };
 }
@@ -334,5 +355,83 @@ describe('authenticated focus control over the real link', () => {
     const state = stateMessageSchema.parse(await client.next());
     expect(state.state).toBe('FOCUSING');
     expect(harness.controller.getState().state).toBe('FOCUSING');
+  });
+
+  it('keeps focus applied when the dashboard socket dies mid-session, then re-attests on reconnect (T-080)', async () => {
+    const harness = await makeIntegrationHarness();
+    const { port } = await harness.start();
+    const first = await authenticatedClient(port);
+
+    first.send(enterFocusMessage());
+    focusStartedMessageSchema.parse(await first.next());
+    const asided = harness.driver.asidedHandles().slice();
+
+    // The tab closes / the laptop loses the socket mid-focus. That must NOT end the session: the
+    // controller, journal and OS state are agent-owned (INV-1/INV-4).
+    first.socket.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(harness.controller.getState().state).toBe('FOCUSING');
+    expect(harness.journal.read()?.sessionId).toBe(SESSION_ID);
+    expect(harness.driver.asidedHandles()).toEqual(asided);
+
+    // Reconnect: a brand-new handshake, a fresh nonce and fresh auth. State is the agent truth.
+    const second = await authenticatedClient(port);
+    second.send({ v: 1, id: 'd-state', type: 'getState' });
+    const state = stateMessageSchema.parse(await second.next());
+    expect(state.state).toBe('FOCUSING');
+    expect(state.session?.sessionId).toBe(SESSION_ID);
+
+    // The reconnected dashboard can end the session; windows restore exactly once.
+    second.send({ v: 1, id: 'd-exit', type: 'exitFocus', sessionId: SESSION_ID });
+    expect(focusEndedMessageSchema.parse(await second.next())).toMatchObject({
+      type: 'focusEnded',
+      sessionId: SESSION_ID,
+      reason: 'USER',
+    });
+    expect(harness.controller.getState().state).toBe('PAIRED');
+    expect(harness.driver.asidedHandles()).toEqual([]);
+    expect(harness.journal.read()).toBeNull();
+  });
+
+  it('recovers an active journal on restart BEFORE the link serves hello/state (T-080)', async () => {
+    const first = await makeIntegrationHarness();
+    const { port } = await first.start();
+    const client = await authenticatedClient(port);
+    client.send(enterFocusMessage());
+    focusStartedMessageSchema.parse(await client.next());
+    expect(first.journal.read()?.sessionId).toBe(SESSION_ID);
+    expect(first.driver.asidedHandles().length).toBeGreaterThan(0);
+
+    // Kill the process: no exitFocus, no journal clear, no restore. Only memory disappears.
+    await first.crash();
+
+    // New process, same userData journal and same OS windows. Recovery must run before the link.
+    const second = await makeIntegrationHarness({
+      driver: first.driver,
+      journal: first.journal,
+    });
+    const restarted = await second.start({ recoverFirst: true });
+    expect(second.events[0]).toMatchObject({
+      type: 'focusEnded',
+      reason: 'CRASH_RECOVERY',
+      sessionId: SESSION_ID,
+    });
+    expect(second.driver.asidedHandles()).toEqual([]);
+    expect(second.journal.read()).toBeNull();
+
+    // hello/state are truthful after recovery: PAIRED, no phantom FOCUSING session.
+    const reconnected = await connect(restarted.port);
+    const hello = helloMessageSchema.parse(await reconnected.next());
+    expect(hello).toMatchObject({ state: 'PAIRED', paired: true });
+    challengeMessageSchema.parse(await reconnected.next());
+    reconnected.send({ v: 1, id: 'd-state', type: 'getState' });
+    const state = stateMessageSchema.parse(await reconnected.next());
+    expect(state.state).toBe('PAIRED');
+    expect(state.session).toBeUndefined();
+
+    // And the restarted agent still accepts a fresh authenticated session.
+    const fresh = await authenticatedClient(restarted.port);
+    fresh.send(enterFocusMessage());
+    expect(focusStartedMessageSchema.parse(await fresh.next()).sessionId).toBe(SESSION_ID);
   });
 });

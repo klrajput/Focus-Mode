@@ -12,6 +12,7 @@ import { createFocusDriver, FakeDriverNotAllowedError } from './focus/drivers/in
 import { FakeDriver } from './focus/drivers/fake.js';
 import { journalEntrySchema, journalWindowRefSchema } from './focus/journal.js';
 import { noopLogger } from './log.js';
+import { AGENT_IPC_CHANNELS } from './ui/view-state.js';
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -34,13 +35,29 @@ describe('Electron hardening (SEC-8)', () => {
     expect(main).toMatch(/contextIsolation:\s*true/);
     expect(main).toMatch(/sandbox:\s*true/);
     expect(main).toMatch(/nodeIntegration:\s*false/);
+    expect(main).toMatch(/nodeIntegrationInWorker:\s*false/);
+    expect(main).toMatch(/webviewTag:\s*false/);
+    expect(main).toMatch(/webSecurity:\s*true/);
+    expect(main).toMatch(/allowRunningInsecureContent:\s*false/);
     expect(main).not.toMatch(/nodeIntegrationInWorker:\s*true/);
     expect(main).not.toMatch(/\bremote\b\s*:/);
   });
 
-  it('denies navigation and window.open', () => {
+  it('denies navigation, redirects, webviews and window.open', () => {
     expect(main).toMatch(/will-navigate/);
+    expect(main).toMatch(/will-redirect/);
+    expect(main).toMatch(/will-attach-webview/);
     expect(main).toMatch(/setWindowOpenHandler\(\(\)\s*=>\s*\(\{\s*action:\s*'deny'/);
+  });
+
+  it('denies every renderer permission request (SEC-8)', () => {
+    expect(main).toMatch(/setPermissionRequestHandler/);
+    expect(main).toMatch(/setPermissionCheckHandler/);
+    // The handler must answer "no" on both the request and the synchronous check path.
+    const request = main.slice(main.indexOf('setPermissionRequestHandler'));
+    expect(request.slice(0, 200)).toMatch(/callback\(false\)/);
+    const check = main.slice(main.indexOf('setPermissionCheckHandler'));
+    expect(check.slice(0, 120)).toMatch(/\(\)\s*=>\s*false/);
   });
 
   it('uses a single-instance lock and restores before quitting', () => {
@@ -72,12 +89,23 @@ describe('Electron hardening (SEC-8)', () => {
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)/);
   });
 
-  it('exposes exactly {getState, endFocus, quit} from the preload', () => {
+  it('exposes exactly the frozen preload surface (4 IPC channels, no new capability)', () => {
     const preload = read('ui/preload.cts');
-    expect(preload).toMatch(/getState/);
-    expect(preload).toMatch(/endFocus/);
-    expect(preload).toMatch(/quit/);
-    expect(preload).not.toMatch(/ipcRenderer\.(send|sendSync|on)\(/);
+
+    // The renderer surface is frozen: 4 IPC channels. `showConsentStatus` is a derived read over
+    // `getState`, not a fifth channel, so the privileged surface did not grow.
+    expect(Object.keys(AGENT_IPC_CHANNELS)).toHaveLength(4);
+    expect(new Set(Object.values(AGENT_IPC_CHANNELS)).size).toBe(4);
+    const invokes = [...preload.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map(
+      (match) => match[1],
+    );
+    expect([...new Set(invokes)].sort()).toEqual([...Object.values(AGENT_IPC_CHANNELS)].sort());
+
+    for (const fn of ['getState', 'endFocus', 'cancelSchedule', 'quit', 'showConsentStatus']) {
+      expect(preload).toMatch(new RegExp(`\\b${fn}\\b`));
+    }
+    expect(preload).toMatch(/Object\.freeze\(bridge\)/);
+    expect(preload).not.toMatch(/ipcRenderer\.(send|sendSync|on|once|postMessage)\(/);
     expect(preload).not.toMatch(/exposeInMainWorld\((?!'focusAgent')/);
     expect(preload.match(/exposeInMainWorld/g)).toHaveLength(1);
   });
@@ -104,8 +132,13 @@ describe('No shell strings and no window-title access (INV-6, SEC rules)', () =>
       const source = read(file);
       expect(source, file).not.toMatch(/GetWindowText/);
       expect(source, file).not.toMatch(/kCGWindowName/);
-      expect(source, file).not.toMatch(/AXTitle/);
+      expect(source, file).not.toMatch(/CGWindowListCopyWindowInfo/);
+      expect(source, file).not.toMatch(/AXTitle|AXDocument/);
       expect(source, file).not.toMatch(/\bWin\+D\b|show desktop/i);
+      // BrowserWindow has a static title; reading a page/OS title or URL is what INV-6 forbids.
+      expect(source, file).not.toMatch(/webContents\.getURL\(|webContents\.getTitle\(/);
+      expect(source, file).not.toMatch(/document\.title|location\.href/);
+      expect(source, file).not.toMatch(/loadURL\(|openExternal\(/);
     }
   });
 
@@ -132,6 +165,21 @@ describe('main-process wiring tripwires', () => {
     expect(source).toContain('link.server = linkServer');
     expect(source).toContain('link.server?.broadcast(buildFocusStarted(');
     expect(source).toContain('link.server?.broadcast(buildFocusEnded(');
+  });
+
+  it('recovers the journal before the link/window can serve state (T-080/FR-023)', () => {
+    // Ordering in main.ts is the guarantee that a restarted agent never reports a phantom
+    // FOCUSING session: recovery (restore + clear + CRASH_RECOVERY event) must complete before
+    // the WebSocket link starts accepting `hello`/`getState` and before the window is created.
+    const source = read('main.ts');
+    const readyIndex = source.indexOf('await app.whenReady()');
+    const recoveryIndex = source.indexOf('await controller.recoverFromJournal()');
+    const linkIndex = source.indexOf('await linkServer.start()');
+    const windowIndex = source.indexOf('mainWindow = createMainWindow()');
+    expect(readyIndex).toBeGreaterThan(-1);
+    expect(recoveryIndex).toBeGreaterThan(readyIndex);
+    expect(linkIndex).toBeGreaterThan(recoveryIndex);
+    expect(windowIndex).toBeGreaterThan(recoveryIndex);
   });
 });
 
