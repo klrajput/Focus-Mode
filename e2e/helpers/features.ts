@@ -119,3 +119,69 @@ export function serverSessionReportingShipped(): boolean {
     server.includes("case 'session.started'")
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// W5 probes (notifications bell, insights, admin, settings, public agent links).
+// ---------------------------------------------------------------------------------------------
+
+/** A5 W5: insights API router mounted (contract §3.1 #21). */
+export function insightsApiShipped(): boolean {
+  return (
+    existsSync(path.join(REPO_ROOT, 'server/src/routes/insights.routes.ts')) &&
+    readIfExists('server/src/routes/index.ts').includes('insights.routes')
+  );
+}
+
+/** A4 W5: the dashboard renders the notifications bell with a real unread count (FR-025). */
+export function notificationsBellUiShipped(): boolean {
+  const client = readSourceTree('client/src');
+  return (
+    notificationsApiShipped() && client.includes('useNotifications') && client.includes('unread')
+  );
+}
+
+/** A5 W5: public agent-links API mounted (contract §3.1 #25). */
+export function agentLinksApiShipped(): boolean {
+  const index = readIfExists('server/src/routes/index.ts');
+  return (
+    existsSync(path.join(REPO_ROOT, 'server/src/routes/agent-links.routes.ts')) &&
+    index.includes('agent-links.routes')
+  );
+}
+
+/** A5 W5: users self-service router (PATCH /users/me, POST /users/me/password — §3.1 #6/#7). */
+export function usersSelfServiceApiShipped(): boolean {
+  const routes = readIfExists('server/src/routes/users.routes.ts');
+  return (
+    routes.includes('/password') &&
+    readIfExists('server/src/routes/index.ts').includes('users.routes')
+  );
+}
+
+/** A5 W5: admin API routers mounted (contract §3.1 #26–#36). */
+export function adminApiShipped(): boolean {
+  return readIfExists('server/src/routes/index.ts').includes('admin');
+}
+
+/** A5 W5: unpair-all endpoint (W5 additive delta C-23, FR-029). */
+export function unpairAllShipped(): boolean {
+  return readIfExists('server/src/routes/devices.routes.ts').includes('unpair-all');
+}
+
+/** A4 W5: `/insights` page wired to the API with the §4.8 empty/success states. */
+export function clientInsightsUiShipped(): boolean {
+  const page = readIfExists('client/src/pages/insights.tsx');
+  return page.includes('useInsights') && /No focus data|Daily focus|7 days/.test(page);
+}
+
+/** A4 W5: `/admin` page wired (users table + stats tabs). */
+export function clientAdminUiShipped(): boolean {
+  const page = readIfExists('client/src/pages/admin.tsx');
+  return page.includes('useAdminUsers') && /Deactivate|Stats|No users match/.test(page);
+}
+
+/** A4 W5: `/settings` page wired (password change, unpair-all, download links). */
+export function clientSettingsUiShipped(): boolean {
+  const page = readIfExists('client/src/pages/settings.tsx');
+  return /useChangePassword|Update password/.test(page) && /Unpair all|Download/.test(page);
+}

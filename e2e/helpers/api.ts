@@ -409,3 +409,151 @@ export async function listNotifications(
   });
   return unwrap<ApiPaginated<ApiNotification>>(response, 200);
 }
+
+// ---------------------------------------------------------------------------------------------
+// W5 surface (INTEGRATION_CONTRACTS §3.1 #6/#7/#21–#36; FR-013/FR-019/FR-025/FR-029) — insights,
+// notifications, admin, public agent links, unpair-all. All through the real Express stack.
+// ---------------------------------------------------------------------------------------------
+
+/** `insights` object shape (contract §3.3). */
+export interface ApiInsights {
+  range: '7d' | '30d' | '90d';
+  timezone: string;
+  totals: {
+    focusMinutes: number;
+    sessions: number;
+    completed: number;
+    cancelled: number;
+    completionRate: number;
+    currentStreak: number;
+    longestStreak: number;
+  };
+  daily: { date: string; minutes: number }[];
+  bestHours: { hour: number; minutes: number }[];
+}
+
+/** `admin stats` object shape (contract §3.3) — aggregates only. */
+export interface ApiAdminStats {
+  users: number;
+  activeUsers: number;
+  devices: number;
+  connectedDevices: number;
+  sessions: number;
+  activeSessions: number;
+  focusMinutes: number;
+}
+
+/** `agent link` object shape (contract §3.3). */
+export interface ApiAgentLink {
+  id: string;
+  os: 'macOS' | 'windows' | 'linux';
+  arch: string;
+  label: string;
+  url: string;
+  version: string;
+  publishedAt: string;
+}
+
+/** Number of unread notifications in a list (the bell count, FR-025). */
+export function unreadCount(items: readonly ApiNotification[]): number {
+  return items.filter((item) => item.readAt === null).length;
+}
+
+/** GET /insights?range=… — FR-013 (contract §3.1 #21). */
+export async function getInsights(
+  request: APIRequestContext,
+  accessToken: string,
+  range: '7d' | '30d' | '90d' = '7d',
+): Promise<ApiInsights> {
+  const response = await request.get(`${API_BASE_URL}/insights`, {
+    headers: bearer(accessToken),
+    params: { range },
+  });
+  return unwrap<ApiInsights>(response, 200);
+}
+
+/** PATCH /notifications/:id/read — marks one notification read (contract §3.1 #23). */
+export async function markNotificationRead(
+  request: APIRequestContext,
+  accessToken: string,
+  notificationId: string,
+): Promise<ApiNotification> {
+  const response = await request.patch(
+    `${API_BASE_URL}/notifications/${encodeURIComponent(notificationId)}/read`,
+    { headers: bearer(accessToken) },
+  );
+  return unwrap<ApiNotification>(response, 200);
+}
+
+/** GET /admin/users — ADMIN-only paginated users (contract §3.1 #26). */
+export async function listAdminUsers(
+  request: APIRequestContext,
+  accessToken: string,
+  params: Record<string, string | number> = { limit: 100 },
+): Promise<ApiPaginated<ApiUser & { isActive: boolean }>> {
+  const response = await request.get(`${API_BASE_URL}/admin/users`, {
+    headers: bearer(accessToken),
+    params,
+  });
+  return unwrap<ApiPaginated<ApiUser & { isActive: boolean }>>(response, 200);
+}
+
+/** PATCH /admin/users/:id — activate/deactivate a user (contract §3.1 #27). */
+export async function patchAdminUser(
+  request: APIRequestContext,
+  accessToken: string,
+  userId: string,
+  input: { isActive?: boolean; role?: 'USER' | 'ADMIN'; name?: string },
+): Promise<ApiUser & { isActive: boolean }> {
+  const response = await request.patch(
+    `${API_BASE_URL}/admin/users/${encodeURIComponent(userId)}`,
+    {
+      headers: bearer(accessToken),
+      data: input,
+    },
+  );
+  return unwrap<ApiUser & { isActive: boolean }>(response, 200);
+}
+
+/** GET /admin/stats — aggregate-only stats (contract §3.1 #36). */
+export async function getAdminStats(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<ApiAdminStats> {
+  const response = await request.get(`${API_BASE_URL}/admin/stats`, {
+    headers: bearer(accessToken),
+  });
+  return unwrap<ApiAdminStats>(response, 200);
+}
+
+/** GET /agent-links — public download links (contract §3.1 #25). */
+export async function listAgentLinks(
+  request: APIRequestContext,
+): Promise<ApiPaginated<ApiAgentLink>> {
+  const response = await request.get(`${API_BASE_URL}/agent-links`, { params: { limit: 100 } });
+  return unwrap<ApiPaginated<ApiAgentLink>>(response, 200);
+}
+
+/** POST /devices/unpair-all — revoke every device token (W5 additive delta C-23, FR-029). */
+export async function unpairAllDevices(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<{ unpaired: number }> {
+  const response = await request.post(`${API_BASE_URL}/devices/unpair-all`, {
+    headers: bearer(accessToken),
+  });
+  return unwrap<{ unpaired: number }>(response, 200);
+}
+
+/** POST /users/me/password — change the authenticated user's password (contract §3.1 #7). */
+export async function changePassword(
+  request: APIRequestContext,
+  accessToken: string,
+  input: { currentPassword: string; newPassword: string },
+): Promise<{ changed: true }> {
+  const response = await request.post(`${API_BASE_URL}/users/me/password`, {
+    headers: bearer(accessToken),
+    data: input,
+  });
+  return unwrap<{ changed: true }>(response, 200);
+}

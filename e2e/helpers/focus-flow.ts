@@ -41,7 +41,7 @@ export function agentStatusBadge(page: Page): Locator {
 /** Navigate to `/dashboard` via the sidebar (SPA navigation, socket stays alive). */
 export async function openDashboard(page: Page): Promise<void> {
   if (page.url().includes('/dashboard')) return;
-  await page.getByRole('link', { name: 'Dashboard' }).click();
+  await page.getByRole('link', { name: 'Dashboard' }).first().click();
   await expect(page).toHaveURL(/\/dashboard$/);
 }
 

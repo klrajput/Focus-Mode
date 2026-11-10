@@ -15,8 +15,9 @@
 // 4-minute ceiling instead of being skipped. Native dialogs (REC-004 consent, the ≥10 s cancellable
 // heads-up) are stubbed inside the agent process only (KI-011) — the page can never answer them.
 //
-// Self-gating (e2e/helpers/features.ts): until A5's scheduler + notifications API and A7's agent
-// schedule flow are merged, this file reports `test.fixme` with the exact missing piece.
+// Self-gating (e2e/helpers/features.ts): until A5's scheduler + A7's agent schedule flow are merged,
+// the scheduled-session test reports `test.fixme` with the exact missing piece. The missed-run test
+// has no gate: `GET /notifications` ships, so it runs the real offline-at-due-time path.
 
 import { expect, test } from '@playwright/test';
 
@@ -25,12 +26,12 @@ import {
   listNotifications,
   listSchedules,
   listSessions,
+  loginUser,
   type ApiSchedule,
 } from './helpers/api';
 import {
   agentAllowlistEndpointShipped,
   agentScheduleFlowShipped,
-  notificationsApiShipped,
   schedulerShipped,
 } from './helpers/features';
 import { endFocusFromAgentWindow, stubNativeAgentDialogs } from './helpers/focus-flow';
@@ -54,7 +55,6 @@ const DUE_WAIT_TIMEOUT_MS = 240_000;
 
 const SCHEDULER_READY =
   schedulerShipped() && agentScheduleFlowShipped() && agentAllowlistEndpointShipped();
-const MISSED_RUN_READY = SCHEDULER_READY && notificationsApiShipped();
 
 /**
  * Weekday (`0 = Sunday`) + `HH:mm` for a schedule due in `offsetMinutes`, computed in the USER's
@@ -209,27 +209,24 @@ test.describe('Scheduled focus session (real scheduler)', () => {
 });
 
 test.describe('Missed scheduled run (agent offline)', () => {
-  test.fixme(
-    !MISSED_RUN_READY,
-    'The real scheduler + MISSED-run reaper ARE present and were verified in the scheduled-session ' +
-      'test (server/src/cron/scheduler.ts dispatches scheduleDue at the due minute). The offline ' +
-      'MISSED path itself cannot be asserted through the frozen REST contract yet because ' +
-      'GET /notifications (§3.1 #22) is not merged — the run/notification rows are only in Mongo, ' +
-      'which the E2E harness must not touch directly (the API is the only writer). A5 scheduler ' +
-      'unit tests cover MISSED; this spec runs for real once the notifications API lands.',
-  );
-
+  // The notifications API now ships (GET /notifications), so this case runs for real — no gate.
   test('a schedule due while no agent is connected is recorded MISSED with a notification, no focus', async ({
     request,
   }) => {
     test.slow();
     test.setTimeout(DUE_WAIT_TIMEOUT_MS);
 
-    // API-only fixture: the seeded USER, no Focus Agent launched in this test (offline at due time).
-    const login = await import('./helpers/api').then(({ loginUser }) =>
-      loginUser(request, { email: 'kabir@demo.com', password: 'Kabir@123' }),
+    // API-only fixture: the seeded USER, and NO Focus Agent launched in this test (offline at due).
+    const { accessToken } = await loginUser(request, {
+      email: 'kabir@demo.com',
+      password: 'Kabir@123',
+    });
+
+    // The seed already contains one SCHEDULE_MISSED notification; take a baseline so only the NEW
+    // notification created for this schedule can satisfy the assertion (no false positive).
+    const baseline = new Set(
+      (await listNotifications(request, accessToken)).items.map((item) => item.id),
     );
-    const accessToken = login.accessToken;
 
     const due = dueIn(LEAD_MINUTES);
     const schedule = await createSchedule(request, accessToken, {
@@ -240,23 +237,30 @@ test.describe('Missed scheduled run (agent offline)', () => {
       enabled: true,
     });
 
+    const wasMissed = async (): Promise<{ message: string } | null> => {
+      const notifications = await listNotifications(request, accessToken);
+      const fresh = notifications.items.filter((item) => !baseline.has(item.id));
+      return (
+        fresh.find(
+          (item) => item.type === 'SCHEDULE_MISSED' && item.message.includes(schedule.name),
+        ) ?? null
+      );
+    };
+
     await test.step('the real scheduler records the MISSED run and notifies the user', async () => {
       await expect
-        .poll(
-          async () => {
-            const notifications = await listNotifications(request, accessToken);
-            return notifications.items.some((item) => /missed|scheduled/i.test(item.message));
-          },
-          {
-            timeout: DUE_WAIT_TIMEOUT_MS - 20_000,
-            intervals: [2_000],
-            message: `no missed-run notification appeared (schedule due ${due.dueAt.toISOString()})`,
-          },
-        )
+        .poll(async () => (await wasMissed()) !== null, {
+          timeout: DUE_WAIT_TIMEOUT_MS - 20_000,
+          intervals: [2_000],
+          message: `no SCHEDULE_MISSED notification for "${schedule.name}" appeared (due ${due.dueAt.toISOString()})`,
+        })
         .toBe(true);
+
+      const missed = await wasMissed();
+      expect(missed?.message).toMatch(/was missed/i);
     });
 
-    await test.step('nothing was forced: no ACTIVE session and no focus on the stale device', async () => {
+    await test.step('nothing was forced: no ACTIVE session, and the run stamp was recorded', async () => {
       const active = await listSessions(request, accessToken, { status: 'ACTIVE' });
       expect(active.items, 'a missed run must never start or fake a session').toHaveLength(0);
 

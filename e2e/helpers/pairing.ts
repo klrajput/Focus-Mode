@@ -40,7 +40,7 @@ export async function pairAgentViaUi(
   const agent = await launchAgent();
   try {
     await signInViaUi(page, DEMO_USER);
-    await page.getByRole('link', { name: 'Devices' }).click();
+    await page.getByRole('link', { name: 'Devices' }).first().click();
     await expect(page).toHaveURL(/\/devices$/);
 
     await page.getByRole('button', { name: 'Pair a device' }).first().click();
