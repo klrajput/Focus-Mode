@@ -11,6 +11,7 @@ import type {
   DeviceListParams,
   PairedDevice,
   RevokedDevice,
+  UnpairedAllDevices,
 } from '../types';
 
 export const devicesApi = {
@@ -23,6 +24,13 @@ export const devicesApi = {
   /** Unpair/revoke: the server revokes the device token and nudges the Focus Agent (INV-5). */
   remove: (id: string): Promise<RevokedDevice> =>
     apiRequest<RevokedDevice>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /**
+   * FR-029 unpair-all: revoke every Focus Agent token for the caller in one call. The server
+   * returns the revoked count; the UI only needs the success.
+   */
+  unpairAll: (): Promise<UnpairedAllDevices> =>
+    apiRequest<UnpairedAllDevices>('/devices/unpair-all', { method: 'POST' }),
 
   attest: (id: string, input: AttestRequestInput): Promise<AttestationResult> =>
     apiRequest<AttestationResult>(`/devices/${encodeURIComponent(id)}/attest`, {

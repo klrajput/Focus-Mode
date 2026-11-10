@@ -177,6 +177,14 @@ export interface RevokedDevice {
   revoked: true;
 }
 
+/**
+ * `POST /devices/unpair-all` success data (FR-029). The body is not one of the frozen §3.3
+ * shapes, so the UI reads at most the count and never derives state from it.
+ */
+export interface UnpairedAllDevices {
+  unpaired: number;
+}
+
 /** `POST /devices/:id/attest` success data (REC-003) — consumed by the local channel only. */
 export interface AttestationResult {
   attestation: string;

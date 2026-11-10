@@ -1,20 +1,21 @@
 /*
- * Landing page — PUBLIC, honest W1 placeholder (UX_SPEC §4.1, T-028 owns the full page).
- * It links into /login and /signup, describes what Focus Mode does in A3's approved wording, and
- * states plainly that installer links are not published yet instead of rendering fake download
- * buttons with invented versions. No data is fetched on this route.
+ * Landing page — PUBLIC marketing page (UX_SPEC §4.1, FR-029).
+ * It describes what Focus Mode does in the approved wording, offers the install → pair → focus
+ * steps, the consent/privacy promises and the real installer links from the public GET /agent-links
+ * endpoint. No fake download button, version or metric is ever rendered: when an admin has not
+ * published an OS build, the §6.1 empty sentence appears instead.
  */
 
 import { Link } from 'react-router-dom';
-import { ArrowRight, Diamond, Download, ShieldCheck, Timer } from 'lucide-react';
+import { ArrowRight, Diamond, ShieldCheck, Timer } from 'lucide-react';
 
-import { EmptyState } from '../components/ui/empty-state';
+import { DownloadLinks } from '../components/settings/download-links';
 import { useDocumentTitle } from '../hooks/use-document-title';
 
 const STEPS = [
   {
     title: 'Download the Focus Agent',
-    body: 'The Focus Agent is the small desktop companion that moves windows — never the cloud.',
+    body: 'Pick the installer for your operating system. The Focus Agent is the small desktop companion that moves windows — never the cloud.',
   },
   {
     title: 'Open it — it shows a 6-digit code',
@@ -24,6 +25,12 @@ const STEPS = [
     title: 'Enter that code on Devices, then focus',
     body: 'Choose a duration, review what stays open, and start when you are ready.',
   },
+] as const;
+
+const NAV_LINKS = [
+  { href: '#how-it-works', label: 'How it works' },
+  { href: '#download', label: 'Download' },
+  { href: '#privacy', label: 'Privacy' },
 ] as const;
 
 export function LandingPage() {
@@ -45,6 +52,15 @@ export function LandingPage() {
             aria-label="Landing navigation"
             className="ml-auto flex flex-wrap items-center gap-2"
           >
+            {NAV_LINKS.map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                className="hidden min-h-11 items-center rounded-[var(--radius-control)] px-3 text-sm font-medium text-ink hover:bg-primary-subtle focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none sm:inline-flex"
+              >
+                {link.label}
+              </a>
+            ))}
             <Link
               to="/login"
               className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] px-3 text-sm font-medium text-primary hover:bg-primary-subtle focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none"
@@ -53,7 +69,7 @@ export function LandingPage() {
             </Link>
             <Link
               to="/signup"
-              className="hidden min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none sm:inline-flex md:h-10"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 text-sm font-medium text-white hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none md:h-10"
             >
               Get started
               <ArrowRight aria-hidden="true" className="h-4 w-4" />
@@ -95,7 +111,11 @@ export function LandingPage() {
             </div>
           </section>
 
-          <section aria-labelledby="steps-heading" className="min-w-0">
+          <section
+            aria-labelledby="steps-heading"
+            id="how-it-works"
+            className="min-w-0 scroll-mt-6"
+          >
             <h2 id="steps-heading" className="sr-only">
               How Focus Mode works
             </h2>
@@ -121,7 +141,7 @@ export function LandingPage() {
           </section>
         </div>
 
-        <section aria-labelledby="downloads-heading" className="mt-10">
+        <section aria-labelledby="downloads-heading" id="download" className="mt-10 scroll-mt-6">
           <h2 id="downloads-heading" className="text-[20px] font-semibold text-ink">
             Download the Focus Agent
           </h2>
@@ -129,19 +149,16 @@ export function LandingPage() {
             macOS, Windows and Linux installers are published by an admin.
           </p>
           <div className="mt-3">
-            <EmptyState
-              icon={Download}
-              title="Installer links are being published — check back soon."
-              description="An admin publishes the macOS, Windows and Linux installers."
-            />
+            <DownloadLinks />
           </div>
         </section>
 
-        <section aria-labelledby="promises-heading" className="mt-10">
+        <section aria-labelledby="promises-heading" id="privacy" className="mt-10 scroll-mt-6">
           <h2
             id="promises-heading"
-            className="text-[13px] font-medium tracking-wide text-muted uppercase"
+            className="flex items-center gap-2 text-[13px] font-medium tracking-wide text-muted uppercase"
           >
+            <ShieldCheck aria-hidden="true" className="h-4 w-4" />
             The promise
           </h2>
           <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -163,6 +180,11 @@ export function LandingPage() {
               </li>
             ))}
           </ul>
+          <p className="mt-3 max-w-prose text-[13px] leading-[1.45] text-muted">
+            The Focus Agent runs on your computer and never moves a window without your consent. The
+            dashboard only receives allowed app identifiers, session times and counts — never window
+            titles or URLs.
+          </p>
         </section>
 
         <p className="mt-8 flex items-center gap-2 text-[13px] text-muted">

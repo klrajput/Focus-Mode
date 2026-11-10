@@ -4,7 +4,7 @@
  * value, so it never claims a connection the local channel does not have.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -29,8 +29,25 @@ const PRIMARY_LABELS = [
   'Settings',
 ] as const;
 
+function emptyNotifications(): Response {
+  return {
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        success: true,
+        data: { items: [], page: 1, limit: 20, total: 0, totalPages: 0 },
+      }),
+  } as Response;
+}
+
 function renderShell(role: 'USER' | 'ADMIN') {
   const user = makeUserWithRole(role);
+  // The bell is part of the shell now; an empty list keeps the header counts honest and offline.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(emptyNotifications())),
+  );
 
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
@@ -73,5 +90,12 @@ describe('AppShell', () => {
       screen.getByRole('status', { name: 'Focus Agent status: Disconnected' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
+
+  it('renders the notifications bell without inventing an unread count', () => {
+    renderShell('USER');
+
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.queryByText('1 unread')).not.toBeInTheDocument();
   });
 });

@@ -4,7 +4,8 @@
  * icon+text) and the `FocusIndicator` (renders nothing without a session). Below `lg` the sidebar
  * becomes a slide-over drawer behind a 44 px menu button so a 360 px viewport never scrolls
  * horizontally; the desktop shell caps content at `--fm-content-max`.
- * The notifications bell is intentionally absent until W5 (DEC-012 Q2) — no fake count is shown.
+ * The notifications bell (W5) shows a real unread count from `GET /notifications` and is absent
+ * from the mobile drawer — the header bell is visible at every width.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -20,6 +21,7 @@ import { AgentStatusBadge } from '../agent/agent-status-badge';
 import { FocusIndicator } from '../agent/focus-indicator';
 import { Button } from '../ui/button';
 import { ADMIN_NAV, PRIMARY_NAV, type NavItem } from './nav-items';
+import { NotificationBell } from './notification-bell';
 
 function navLinkClass(isActive: boolean): string {
   return cn(
@@ -299,6 +301,7 @@ export function AppShell() {
               </div>
 
               <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+                <NotificationBell />
                 <AgentStatusBadge />
                 <AccountMenu />
               </div>
