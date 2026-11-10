@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Focus Mode — distraction lockdown dashboard: React dashboard + Express/MongoDB API + Focus Agent (Electron).",
+  "description": "Focus Mode \u2014 distraction lockdown dashboard: React dashboard + Express/MongoDB API + Focus Agent (Electron).",
   "workspaces": [
     "shared",
     "server",
@@ -22,7 +22,9 @@
     "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace client && npm run build --workspace agent",
     "dev": "concurrently --names \"server,client,agent\" --prefix-colors \"blue,green,magenta\" \"npm run dev --workspace server\" \"npm run dev --workspace client\" \"npm run dev --workspace agent\"",
     "pretypecheck": "npm run build -w @focus-mode/shared",
-    "pretest": "npm run build -w @focus-mode/shared"
+    "pretest": "npm run build -w @focus-mode/shared",
+    "predev": "npm run build -w @focus-mode/shared",
+    "seed": "npm run seed -w @focus-mode/server"
   },
   "devDependencies": {
     "@playwright/test": "1.65.0",
