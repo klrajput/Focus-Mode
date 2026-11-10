@@ -7,8 +7,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '@focus-mode/shared';
 import type { AgentConnectionStatus, LocalMessage } from '@focus-mode/shared';
 
+import { ApiError } from '../api/errors';
 import { AgentLink, type LinkSocket, type SocketFactory } from './agent-link';
 
 const DEVICE_ID = '507f1f77bcf86cd799439011';
@@ -112,6 +114,15 @@ const STATE_FOCUSING = {
   allowList: [],
 } as const;
 
+const STATE_PAIRED = {
+  v: 1,
+  id: 'a-009',
+  type: 'state',
+  state: 'PAIRED',
+  protected: [],
+  allowList: [],
+} as const;
+
 const FOCUS_ENDED = {
   v: 1,
   id: 'a-006',
@@ -137,6 +148,9 @@ function makeLink(
     attest?: (deviceId: string, nonce: string) => Promise<string>;
     reconnectBaseMs?: number;
     reconnectMaxMs?: number;
+    attestRetryBaseMs?: number;
+    attestRetryMaxMs?: number;
+    attestMaxAttempts?: number;
   } = {},
 ): AgentLink {
   return new AgentLink({
@@ -145,7 +159,19 @@ function makeLink(
     attest: overrides.attest ?? (async () => 'unused-attestation-value'),
     reconnectBaseMs: overrides.reconnectBaseMs,
     reconnectMaxMs: overrides.reconnectMaxMs,
+    attestRetryBaseMs: overrides.attestRetryBaseMs,
+    attestRetryMaxMs: overrides.attestRetryMaxMs,
+    attestMaxAttempts: overrides.attestMaxAttempts,
   });
+}
+
+/** The exact error the API answers while the agent has not opened its cloud link yet. */
+function noDeviceConnectedError(): ApiError {
+  return new ApiError(
+    ERROR_CODES.NO_DEVICE_CONNECTED,
+    409,
+    'No device connected — start your Focus Agent.',
+  );
 }
 
 afterEach(() => {
@@ -334,6 +360,134 @@ describe('AgentLink', () => {
     sockets[0]?.receive(CHALLENGE);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(attest).toHaveBeenCalledTimes(1);
+
+    link.dispose();
+  });
+
+  /*
+   * KI-010 (the remaining part): the agent issues the post-pairing challenge from
+   * `cloud.on('paired')`, which runs BEFORE it opens its `/agent-link` WebSocket — so the device is
+   * still DISCONNECTED in the API and `POST /devices/:id/attest` answers NO_DEVICE_CONNECTED.
+   * The dashboard must retry that transient failure instead of giving up until a page reload.
+   */
+  it('retries the attestation while the freshly paired device is not CONNECTED yet (KI-010)', async () => {
+    const sockets: MockSocket[] = [];
+    let attempts = 0;
+    const attest = vi.fn(async () => {
+      attempts += 1;
+      if (attempts < 3) throw noDeviceConnectedError();
+      return 'header.payload.signature-header-payload-signature';
+    });
+    const link = makeLink(sockets, {
+      resolveDeviceId: async () => DEVICE_ID,
+      attest,
+      attestRetryBaseMs: 1,
+      attestRetryMaxMs: 2,
+    });
+
+    const statuses: AgentConnectionStatus[] = [];
+    const errors: string[] = [];
+    link.on('status', (event) => statuses.push(event.status));
+    link.on('error', (event) => errors.push(event.message));
+
+    link.connect();
+    sockets[0]?.open();
+    sockets[0]?.receive(HELLO_UNPAIRED);
+    expect(statuses.at(-1)).toBe('IDLE');
+
+    // Pairing completed on the dashboard: the agent nudges a challenge on the same socket.
+    sockets[0]?.receive(CHALLENGE);
+
+    await vi.waitFor(
+      () => {
+        expect(sockets[0]?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+    expect(attest).toHaveBeenCalledTimes(3);
+    expect(errors).toEqual([]);
+
+    sockets[0]?.receive(AUTH_OK);
+    sockets[0]?.receive(STATE_PAIRED);
+    expect(statuses.at(-1)).toBe('PAIRED');
+    expect(link.isAuthenticated()).toBe(true);
+
+    link.dispose();
+  });
+
+  it('does not retry an attestation the API rejects permanently', async () => {
+    const sockets: MockSocket[] = [];
+    const attest = vi.fn(async () => {
+      throw new ApiError(ERROR_CODES.FORBIDDEN, 403, 'Forbidden');
+    });
+    const link = makeLink(sockets, {
+      resolveDeviceId: async () => DEVICE_ID,
+      attest,
+      attestRetryBaseMs: 1,
+      attestRetryMaxMs: 2,
+    });
+
+    const statuses: AgentConnectionStatus[] = [];
+    const errors: string[] = [];
+    link.on('status', (event) => statuses.push(event.status));
+    link.on('error', (event) => errors.push(event.message));
+
+    link.connect();
+    sockets[0]?.open();
+    sockets[0]?.receive(HELLO_PAIRED);
+    sockets[0]?.receive(CHALLENGE);
+
+    await vi.waitFor(() => expect(statuses.at(-1)).toBe('IDLE'), { timeout: 2000 });
+    expect(attest).toHaveBeenCalledTimes(1);
+    expect(sockets[0]?.frames().some((frame) => frame.type === 'auth')).toBe(false);
+    expect(errors).toContain('The dashboard could not attest this Focus Agent.');
+    expect(sockets).toHaveLength(1);
+
+    link.dispose();
+  });
+
+  it('re-handshakes for a fresh challenge when transient attestation failures exhaust the retries', async () => {
+    const sockets: MockSocket[] = [];
+    let deviceReady = false;
+    const attest = vi.fn(async () => {
+      if (!deviceReady) throw noDeviceConnectedError();
+      return 'header.payload.signature-header-payload-signature';
+    });
+    const link = makeLink(sockets, {
+      resolveDeviceId: async () => DEVICE_ID,
+      attest,
+      attestRetryBaseMs: 1,
+      attestRetryMaxMs: 2,
+      attestMaxAttempts: 3,
+      reconnectBaseMs: 1,
+    });
+
+    const statuses: AgentConnectionStatus[] = [];
+    link.on('status', (event) => statuses.push(event.status));
+
+    link.connect();
+    sockets[0]?.open();
+    sockets[0]?.receive(HELLO_UNPAIRED);
+    sockets[0]?.receive(CHALLENGE);
+
+    // The first socket exhausts its retries and drops; the reconnect opens a fresh socket.
+    await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(1), { timeout: 2000 });
+    expect(attest).toHaveBeenCalledTimes(3);
+    expect(statuses).toContain('DISCONNECTED');
+
+    deviceReady = true;
+    sockets[1]?.open();
+    sockets[1]?.receive(HELLO_PAIRED);
+    sockets[1]?.receive(CHALLENGE);
+
+    await vi.waitFor(
+      () => {
+        expect(sockets[1]?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+    sockets[1]?.receive(AUTH_OK);
+    expect(statuses.at(-1)).toBe('PAIRED');
 
     link.dispose();
   });

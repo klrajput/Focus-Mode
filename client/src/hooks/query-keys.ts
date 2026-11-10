@@ -23,6 +23,10 @@ export const queryKeys = {
   insights: (range: InsightsRange) => ['insights', range] as const,
   devices: (params: DeviceListParams = {}) => ['devices', params] as const,
   allowlist: ['allowlist'] as const,
+  /** Shared admin-published presets (GET /presets) used by the allow-list editor. */
+  presets: ['presets'] as const,
+  /** Prefix for every `GET /schedules` list (mutations invalidate all of them). */
+  schedulesRoot: ['schedules'] as const,
   schedules: (params: PageParams = {}) => ['schedules', params] as const,
   adminUsers: (params: AdminUserListParams = {}) => ['admin', 'users', params] as const,
   notifications: (params: PageParams = {}) => ['notifications', params] as const,

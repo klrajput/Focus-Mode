@@ -55,11 +55,22 @@ const REMOVED_JARGON = [
   'Until an admin publishes them, no fake installer is offered here',
 ] as const;
 
-/** Approved replacement copy that must exist (UX_SPEC §12.2, column "Replacement"). */
+/**
+ * Approved replacement copy that must exist.
+ * W4 note: the two W2 placeholders "Editing and adding apps" / "Creating and editing schedules"
+ * were replaced by the real editor copy below (the features now exist, so a "not available yet"
+ * sentence would be a lie).
+ */
 const APPROVED_REPLACEMENTS = [
   'Connect the Focus Agent to start a session. The Focus Agent moves windows aside',
-  'Editing and adding apps',
-  'Creating and editing schedules',
+  'Your apps — these stay open',
+  'Protected — always stays open',
+  "This app is protected and must stay open during focus. It can't be removed.",
+  'No schedules yet. Add one for your next deep-work block.',
+  'Times shown in',
+  'Focused today',
+  'Next scheduled session',
+  'No focus sessions yet. Your first session will show up here.',
   'This table is the accessible view of your daily focus minutes.',
   "Profile editing isn't available yet.",
   'Email is managed by your account; changing it needs an admin.',
