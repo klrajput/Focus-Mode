@@ -3,6 +3,8 @@
 // can be asserted without a display, especially the invariants: End focus is always listed but
 // enabled only while FOCUSING, the pairing code never appears in a menu label (DEC-003), and
 // Start at login is a checkbox that defaults to OFF with an explanation.
+// DEC-021/T-064 adds the scheduled-session heads-up: while a run is pending the menu shows its
+// countdown and an always-enabled "Cancel scheduled session" (the tray escape hatch, FR-012).
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +15,13 @@ import {
 } from './tray-menu.js';
 
 const NOW = new Date('2026-11-10T10:17:50.000Z');
+
+const PENDING_SCHEDULE = {
+  runId: '507f1f77bcf86cd799439014',
+  scheduleId: '507f1f77bcf86cd799439013',
+  durationMin: 25,
+  startsAt: '2026-11-10T10:18:00.000Z',
+};
 
 function makeInput(overrides: Partial<TrayMenuInput> = {}): TrayMenuInput {
   return {
@@ -28,7 +37,13 @@ function makeInput(overrides: Partial<TrayMenuInput> = {}): TrayMenuInput {
 
 function findAction(
   entries: readonly TrayMenuEntry[],
-  action: 'end-focus' | 'show-window' | 'show-pairing-code' | 'quit',
+  action:
+    | 'end-focus'
+    | 'cancel-schedule'
+    | 'show-window'
+    | 'show-pairing-code'
+    | 'reset-consent'
+    | 'quit',
 ) {
   const entry = entries.find(
     (candidate): candidate is Extract<TrayMenuEntry, { kind: 'action' }> =>
@@ -200,5 +215,42 @@ describe('tray menu — stability', () => {
     const entries = buildTrayMenu(makeInput()).entries;
     expect(entries[0]?.kind).not.toBe('separator');
     expect(entries.at(-1)?.kind).not.toBe('separator');
+  });
+});
+
+describe('tray menu — scheduled-session heads-up (DEC-021, FR-012)', () => {
+  const pending = buildTrayMenu(makeInput({ paired: true, pendingSchedule: PENDING_SCHEDULE }));
+
+  it('shows the countdown and an always-enabled Cancel action', () => {
+    expect(labels(pending.entries)).toContain('● Scheduled session starts in 00:10 (25 min)');
+    const cancel = findAction(pending.entries, 'cancel-schedule');
+    expect(cancel.enabled).toBe(true);
+    expect(cancel.label).toBe('Cancel scheduled session');
+    expect(labels(pending.entries)).toContain(
+      'You can also cancel from the Focus Agent tray menu until the countdown reaches zero.',
+    );
+  });
+
+  it('keeps End focus listed but disabled — cancelling is not ending (INV-5)', () => {
+    expect(findAction(pending.entries, 'end-focus').enabled).toBe(false);
+    expect(findAction(pending.entries, 'quit').enabled).toBe(true);
+  });
+
+  it('reports the start instant honestly once the window elapsed', () => {
+    const elapsed = buildTrayMenu(
+      makeInput({
+        paired: true,
+        pendingSchedule: { ...PENDING_SCHEDULE, startsAt: '2026-11-10T10:17:00.000Z' },
+      }),
+    );
+    expect(labels(elapsed.entries)).toContain('● Scheduled session starting now (25 min)');
+  });
+
+  it('lists no Cancel action when nothing is pending', () => {
+    const idle = buildTrayMenu(makeInput());
+    expect(
+      idle.entries.some((entry) => entry.kind === 'action' && entry.action === 'cancel-schedule'),
+    ).toBe(false);
+    expect(labels(idle.entries).some((label) => label.includes('Scheduled session'))).toBe(false);
   });
 });

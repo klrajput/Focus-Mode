@@ -31,6 +31,7 @@ describe('parseAgentEnv', () => {
     expect(config.logLevel).toBe('info');
     expect(config.smoke).toBe(false);
     expect(config.enforceIntervalMs).toBe(1500);
+    expect(config.scheduleHeadsUpMs).toBe(10_000);
     expect(config.apiBaseUrl).toBeUndefined();
     expect(config.userDataDir).toBeUndefined();
   });
@@ -44,6 +45,13 @@ describe('parseAgentEnv', () => {
     expect(config.smoke).toBe(true);
     expect(config.enforceIntervalMs).toBe(2000);
     expect(config.headless).toBe(true);
+  });
+
+  it('parses the DEC-021 heads-up window and refuses anything below the 10 s minimum', () => {
+    expect(parseAgentEnv({ AGENT_SCHEDULE_HEADSUP_MS: '15000' }).scheduleHeadsUpMs).toBe(15_000);
+    for (const headsUp of ['9999', '0', 'abc', '120001']) {
+      expect(() => parseAgentEnv({ AGENT_SCHEDULE_HEADSUP_MS: headsUp })).toThrow(AgentEnvError);
+    }
   });
 
   it('rejects an enforcement interval outside the REC-005 1–2 s window', () => {

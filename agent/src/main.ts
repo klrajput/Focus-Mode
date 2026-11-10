@@ -1,13 +1,13 @@
-// main.ts — Focus Agent Electron lifecycle (T-030/T-050/T-051/T-113): single-instance lock,
-// window + tray, loopback link, journal-first FocusController, native first-run consent, the
-// REC-005 enforcement loop and restore-before-exit on every quit path.
-// Closing the window only hides it (the tray must keep offering End focus/Quit, FR-022);
-// `window-all-closed` never quits. SIGTERM/SIGINT/before-quit all call `exitFocus()` first
-// (INV-5). Sleep/resume is reconciled against the absolute `endsAt` (TD §7.4).
-// `AGENT_SMOKE=1` runs a headless one-shot: no window/tray/cloud, print exactly
-// `SMOKE_READY port=<n>`, answer one `hello` + `getState`, exit 0 (T-113).
+// main.ts — main process wiring (T-030/T-050/T-051/T-113/T-064/T-069): app lifecycle, tray,
+// dashboard link, journal-first FocusController, REC-004 native consent, REC-005 enforcement, the
+// DEC-021 scheduled-session flow (heads-up → allow-list → SCHEDULE start → cloud report) and
+// restore-before-exit on every quit path.
+// Invariants kept here: INV-2 (a `scheduleDue` announcement is turned into focus only after the
+// local ≥10 s heads-up + consent gate, never commanded from the cloud), INV-4/INV-5 (restore
+// before emit/exit), FR-027 (session reports come from the controller lifecycle, so a closed
+// dashboard tab cannot lose the session), DEC-003 (the pairing code stays in the window).
 // Security (SEC-8): contextIsolation + sandbox + no nodeIntegration, navigation/window-open
-// denied, preload exposes exactly {getState, endFocus, quit, revokeConsent}.
+// denied, preload exposes exactly {getState, endFocus, cancelSchedule, quit, showConsentStatus}.
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Notification,
   powerMonitor,
   safeStorage,
   type IpcMainInvokeEvent,
@@ -25,6 +26,7 @@ import {
 import type { LocalMessageType, OsName } from '@focus-mode/shared';
 import { resolveProtectedEntries } from './allowlist.js';
 import { CloudClient } from './cloud/client.js';
+import { createLifecycleReporter, SessionReporter } from './cloud/reporting.js';
 import { createCredentialStore } from './cloud/storage.js';
 import { AgentEnvError, loadAgentEnv, type AgentConfig } from './config/env.js';
 import { ConsentGate, FileConsentStore, NATIVE_CONSENT_COPY } from './focus/consent.js';
@@ -42,14 +44,27 @@ import {
   type AttestationVerification,
 } from './link/attestation.js';
 import { FocusLinkHandlers } from './link/handlers.js';
-import { buildFocusEnded, buildFocusStarted, type LinkSnapshot } from './link/messages.js';
+import {
+  buildFocusEnded,
+  buildFocusStarted,
+  buildScheduleHeadsUp,
+  type LinkSnapshot,
+} from './link/messages.js';
 import { LinkServer, type LinkAddress } from './link/server.js';
 import type { Logger } from './log.js';
 import { noopLogger } from './log.js';
 import { createElectronLogger } from './log-electron.js';
 import { createStderrLogger } from './log-process.js';
+import { ScheduleFlow } from './schedule/flow.js';
 import { AgentTray } from './tray.js';
-import type { AgentViewState, ConsentStatusView } from './ui/view-state.js';
+import {
+  SCHEDULE_HEADSUP_BODY,
+  SCHEDULE_HEADSUP_TITLE,
+  buildPendingScheduleView,
+  type AgentViewState,
+  type CancelScheduleResult,
+  type ConsentStatusView,
+} from './ui/view-state.js';
 
 const APP_NAME = 'Focus Agent';
 /**
@@ -63,6 +78,8 @@ const UI_BACKGROUND = '#1E1B4B';
 const IPC_CHANNELS = {
   getState: 'agent:get-state',
   endFocus: 'agent:end-focus',
+  /** DEC-021: cancel the scheduled-session heads-up. Starts nothing, ever. */
+  cancelSchedule: 'agent:cancel-schedule',
   quit: 'agent:quit',
 } as const;
 /** T-113: a smoke run must fail within 20 s instead of hanging a CI job. */
@@ -212,6 +229,40 @@ async function bootstrap(): Promise<void> {
   // broadcast to dashboards that are already connected.
   const link: { server?: LinkServer } = {};
 
+  /**
+   * T-069/FR-027: session reports go to the cloud from the controller lifecycle, so a session is
+   * persisted even when the dashboard tab was closed (its POST /sessions never runs). The
+   * transport is late-bound to `cloud`; a report created while the link is down is queued and
+   * flushed on the next `connected` event. REC-006: de-duplicated on `clientSessionId`.
+   */
+  const reporter = new SessionReporter({
+    transport: { send: (message) => cloud?.sendCloudMessage(message) ?? false },
+    logger,
+  });
+  const reportLifecycle = createLifecycleReporter(reporter);
+
+  // DEC-021: the scheduled-session flow (pending heads-up, allow-list fetch, SCHEDULE start).
+  // Assigned after `cloud` exists; `viewState()`/IPC read it through this handle.
+  let scheduleFlow: ScheduleFlow | undefined;
+
+  /** Native heads-up for a scheduled run; the tray + window are the cancel surfaces (FR-012). */
+  function showScheduleNotification(title: string, body: string): void {
+    if (headless || config.smoke) return;
+    try {
+      if (!Notification.isSupported()) {
+        logger.warn('Native notifications are not supported here; the tray/window show the run');
+        return;
+      }
+      const notification = new Notification({ title, body, silent: false });
+      // Any interaction brings up the window, which carries the Cancel button.
+      notification.on('click', () => showWindow());
+      notification.show();
+    } catch (error) {
+      // A notification failure must never take the agent (or the heads-up) down.
+      logger.warn('Could not show the scheduled-session notification', error);
+    }
+  }
+
   // DEC-006: the OS default browser is protected even if it is not one of the hard-coded
   // browsers (macOS resolves it via NSWorkspace; other platforms return []). Failure is
   // non-fatal — static protection still stands.
@@ -236,9 +287,13 @@ async function bootstrap(): Promise<void> {
           sessionId: event.sessionId,
           endsAt: event.endsAt,
           source: event.source,
+          ...(event.scheduleRunId === undefined ? {} : { scheduleRunId: event.scheduleRunId }),
         });
         // One frame per event per authenticated dashboard, whatever triggered the start.
         link.server?.broadcast(buildFocusStarted(event, controller.getState().protected));
+        // T-069: one report per started session (MANUAL and SCHEDULE alike). Idempotent by
+        // clientSessionId, so the dashboard's own POST /sessions can race it safely (REC-006).
+        reportLifecycle(event);
       } else {
         logger.info('Focus session ended', {
           sessionId: event.sessionId,
@@ -247,6 +302,9 @@ async function bootstrap(): Promise<void> {
           status: event.status,
         });
         link.server?.broadcast(buildFocusEnded(event));
+        // Covers every end trigger (dashboard, tray, timer, sleep, crash recovery, unpair, quit):
+        // the dashboard-closed path is exactly why this report exists (FR-027).
+        reportLifecycle(event);
       }
       tray?.refresh();
     },
@@ -307,10 +365,17 @@ async function bootstrap(): Promise<void> {
       : { status: 'granted', grantedAt: record.acceptedAt, revocable: true };
   }
 
+  /** `down` when the loopback link never bound; `listening` when no dashboard is attached. */
+  function dashboardLinkStatus(): 'connected' | 'listening' | 'down' {
+    if (linkAddress === undefined) return 'down';
+    return linkServer.connectedClients > 0 ? 'connected' : 'listening';
+  }
+
   function viewState(): AgentViewState {
     const snapshot: FocusSnapshot = controller.getState();
     const cloudState = cloud?.getState();
     const isPaired = cloudState?.paired ?? false;
+    const pendingRun = scheduleFlow?.pending() ?? null;
     return {
       agentVersion: app.getVersion(),
       os,
@@ -324,6 +389,21 @@ async function bootstrap(): Promise<void> {
       allowList: snapshot.allowList,
       // Read-only view of the native first-run permission (revoke is a tray action).
       consent: consentStatusView(),
+      // DEC-021/T-064: the heads-up must be visible in the window (and assertable via IPC), so a
+      // scheduled start can never happen without the user having seen a cancellable run.
+      pendingSchedule:
+        pendingRun === null ? null : buildPendingScheduleView(pendingRun, new Date()),
+      // Honest link health for the window (the renderer already has copy for every state).
+      links: {
+        cloud:
+          cloudState === undefined
+            ? 'not-configured'
+            : cloudState.connected
+              ? 'connected'
+              : 'disconnected',
+        dashboard: dashboardLinkStatus(),
+        dashboards: linkServer.connectedClients,
+      },
     };
   }
 
@@ -361,6 +441,19 @@ async function bootstrap(): Promise<void> {
             'at the next start.',
         };
       }
+    });
+    ipcMain.handle(IPC_CHANNELS.cancelSchedule, (event): CancelScheduleResult => {
+      assertTrustedSender(event);
+      if (scheduleFlow === undefined) {
+        return { ok: false, outcome: 'NOTHING_PENDING' };
+      }
+      // DEC-021: the flow clears the heads-up before sending `scheduleRunCancelled`, so a second
+      // click can never produce a second message for the same run.
+      const outcome = scheduleFlow.cancel();
+      tray?.refresh();
+      return outcome === 'CANCELLED'
+        ? { ok: true, outcome }
+        : { ok: false, outcome, message: 'No scheduled session is waiting to start.' };
     });
     ipcMain.handle(IPC_CHANNELS.quit, (event) => {
       assertTrustedSender(event);
@@ -417,6 +510,9 @@ async function bootstrap(): Promise<void> {
     shuttingDown = true;
     shuttingDownPromise = (async () => {
       logger.info('Focus Agent shutting down');
+      // DEC-021: a heads-up that never elapsed is dropped locally; the cloud reaper records that
+      // run as MISSED (no cancel message, because the user did not cancel it).
+      scheduleFlow?.dispose();
       try {
         // INV-5: restore before exit; a failure keeps the journal for next-start recovery.
         await controller.exitFocus('QUIT');
@@ -531,6 +627,10 @@ async function bootstrap(): Promise<void> {
           pairingCode: state.pairingCode,
           sessionEndsAt: state.session?.endsAt ?? null,
           consent: state.consent ?? null,
+          cloud: state.links?.cloud ?? 'unknown',
+          // DEC-021: while a scheduled run is in its heads-up the menu shows the countdown and
+          // an always-enabled Cancel — the second escape hatch next to the window (FR-012).
+          pendingSchedule: scheduleFlow?.pending() ?? null,
         };
       },
       showWindow,
@@ -541,6 +641,9 @@ async function bootstrap(): Promise<void> {
           .catch((error: unknown) => {
             logger.error('End focus from the tray failed; journal kept', error);
           });
+      },
+      cancelScheduledSession: () => {
+        scheduleFlow?.cancel();
       },
       quit: () => {
         void shutdown();
@@ -581,23 +684,83 @@ async function bootstrap(): Promise<void> {
       logger.info('Cloud pairing established; local dashboards may now authenticate', {
         deviceId: info.deviceId,
       });
-      // Dashboards connected before pairing could not get a challenge; issue one now.
+      // KI-010 agent half: dashboards connected before pairing got an unpaired `hello` and no
+      // challenge, so a fresh `hello` + `challenge` is re-issued now — no page reload needed.
       linkServer.refreshPairing();
       tray?.refresh();
     });
     cloud.on('revoked', (info) => {
       logger.info('Cloud revoked this device; back to the unpaired flow', { reason: info.reason });
+      // KI-010 agent half: the frozen local protocol has no "unpaired" frame, so authenticated
+      // dashboards are told by a policy close (1008) and re-handshake as unpaired on reconnect.
+      linkServer.notifyUnpaired();
+      // A heads-up can no longer start (there is no device token): drop it without pretending the
+      // user cancelled — the cloud reaper records that run as MISSED (DEC-021 §4).
+      scheduleFlow?.dispose();
+      tray?.refresh();
+    });
+    cloud.on('connected', (info) => {
+      // T-069: a report created while the link was down must not be lost (FR-027).
+      if (info.connected) reporter.flush();
       tray?.refresh();
     });
     cloud.on('scheduleDue', (message) => {
-      // INV-2: an announcement only. W4 owns the >=10 s heads-up + local consent; this module
-      // must never start a session on its own.
-      logger.info('Cloud announced a scheduled run; no session started (heads-up lands in W4)', {
-        runId: message.runId,
-        scheduleId: message.scheduleId,
-        durationMin: message.durationMin,
-        allowListVersion: message.allowListVersion,
-      });
+      // INV-2: this is an announcement. The flow shows the local ≥10 s heads-up and only starts
+      // focus after it elapses, through the controller's consent gate (DEC-021).
+      scheduleFlow?.handleScheduleDue(message);
+    });
+
+    // DEC-021: the scheduled-session flow. Everything it touches is injected, so the cancel /
+    // timeout / failure matrix is unit-tested against the FakeDriver with no Electron.
+    scheduleFlow = new ScheduleFlow({
+      baseUrl: config.apiBaseUrl,
+      headsUpMs: config.scheduleHeadsUpMs,
+      getDeviceToken: () => cloud?.getDeviceToken() ?? null,
+      getCapabilities: () => controller.capabilities(),
+      isFocusing: () => controller.isFocusing(),
+      enterFocus: (request) => controller.enterFocus(request),
+      sendCloud: (message) => cloud?.sendCloudMessage(message) ?? false,
+      logger,
+      onHeadsUp: (pending) => {
+        // Local dashboards get the informational frame; the native notification is the visible
+        // heads-up, and the tray/window carry the Cancel affordance (FR-012).
+        link.server?.broadcast(buildScheduleHeadsUp(pending));
+        showScheduleNotification(
+          SCHEDULE_HEADSUP_TITLE,
+          `${SCHEDULE_HEADSUP_BODY}\n\n${pending.durationMin} min session starts in ` +
+            `${Math.round(config.scheduleHeadsUpMs / 1000)} s — cancel it from the Focus Agent ` +
+            'window or its tray menu.',
+        );
+        logger.info('Scheduled session heads-up is visible; waiting for the user or the window', {
+          runId: pending.runId,
+          durationMin: pending.durationMin,
+          startsAt: pending.startsAt,
+        });
+        tray?.refresh();
+      },
+      onStarted: (pending, sessionId) => {
+        logger.info('Scheduled session started from the heads-up', {
+          runId: pending.runId,
+          sessionId,
+        });
+        tray?.refresh();
+      },
+      onCancelled: (pending) => {
+        logger.info('Scheduled session cancelled by the user', { runId: pending.runId });
+        tray?.refresh();
+      },
+      onFailed: (pending, reason, detail) => {
+        // Honest failure: no focus was applied. The user still gets a visible reason.
+        showScheduleNotification(
+          'Scheduled session did not start',
+          `Focus Mode could not start the ${pending.durationMin} min scheduled session: ${detail}.`,
+        );
+        tray?.refresh();
+        logger.warn('Scheduled session failed honestly; nothing was applied', {
+          runId: pending.runId,
+          reason,
+        });
+      },
     });
 
     try {

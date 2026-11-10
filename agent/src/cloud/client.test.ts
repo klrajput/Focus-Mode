@@ -607,3 +607,82 @@ describe('revocation (FR-029, INV-5)', () => {
     expect(cloud.getState().paired).toBe(true);
   });
 });
+
+describe('agent → cloud sending (T-068/T-069 transport)', () => {
+  it('exposes the device token only for device-authenticated calls and sends frames while open', async () => {
+    const fake = await startFake();
+    const store = new MemoryStore({
+      deviceId: DEVICE_ID,
+      deviceToken: DEVICE_TOKEN,
+      userId: USER_ID,
+    });
+    const { cloud } = makeHarness(fake, {}, store);
+    const connectedEvents: boolean[] = [];
+    cloud.on('connected', (info) => connectedEvents.push(info.connected));
+
+    await cloud.start();
+    await fake.waitForConnections(1);
+    await fake.waitForHeartbeats(1);
+
+    expect(cloud.getDeviceToken()).toBe(DEVICE_TOKEN);
+
+    const sent = cloud.sendCloudMessage({
+      v: 1,
+      id: 'c-report-1',
+      type: 'session.started',
+      clientSessionId: SESSION_ID,
+      startedAt: '2026-11-10T10:05:00.000Z',
+      plannedMinutes: 25,
+      source: 'SCHEDULE',
+      scheduleRunId: RUN_ID,
+    });
+    expect(sent).toBe(true);
+    // The fake cloud records every non-heartbeat frame: the report must arrive verbatim.
+    await vi.waitFor(() => {
+      expect(fake.junk).toHaveLength(1);
+    });
+    expect(JSON.parse(fake.junk[0] ?? '{}')).toMatchObject({
+      type: 'session.started',
+      clientSessionId: SESSION_ID,
+      scheduleRunId: RUN_ID,
+    });
+
+    // A cloud→agent type is refused rather than echoed back (INV-2 is symmetric).
+    expect(cloud.sendCloudMessage({ v: 1, id: 'c-bad', type: 'revoked' })).toBe(false);
+
+    expect(connectedEvents).toEqual([true]);
+  });
+
+  it('reports disconnected and refuses to send while the link is down', async () => {
+    const fake = await startFake();
+    const { cloud } = makeHarness(
+      fake,
+      { reconnectBackoff: { initialMs: 50, maxMs: 200, factor: 2, jitterRatio: 0 } },
+      new MemoryStore({ deviceId: DEVICE_ID, deviceToken: DEVICE_TOKEN, userId: USER_ID }),
+    );
+    const connectedEvents: boolean[] = [];
+    cloud.on('connected', (info) => connectedEvents.push(info.connected));
+
+    await cloud.start();
+    await fake.waitForConnections(1);
+    await fake.waitForHeartbeats(1);
+
+    fake.closeCurrent(1011);
+    await vi.waitFor(() => {
+      expect(connectedEvents).toContain(false);
+    });
+    expect(cloud.sendCloudMessage({ v: 1, id: 'c-x', type: 'revoked' })).toBe(false);
+  });
+
+  it('has no token and cannot send while unpaired', async () => {
+    const fake = await startFake();
+    fake.pendingPolls = 1_000;
+    const { cloud } = makeHarness(fake);
+
+    await cloud.start();
+    // Still unpaired: there is no device token and no socket to send on.
+    expect(cloud.getState().paired).toBe(false);
+    expect(cloud.getDeviceToken()).toBeNull();
+    expect(cloud.sendCloudMessage({ v: 1, id: 'c-y', type: 'revoked' })).toBe(false);
+  });
+});

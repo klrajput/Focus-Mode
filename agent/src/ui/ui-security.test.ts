@@ -20,7 +20,12 @@ describe('preload bridge (SEC-8)', () => {
       (match) => match[1],
     );
     expect([...new Set(invokes)].sort()).toEqual(
-      [AGENT_IPC_CHANNELS.endFocus, AGENT_IPC_CHANNELS.getState, AGENT_IPC_CHANNELS.quit].sort(),
+      [
+        AGENT_IPC_CHANNELS.endFocus,
+        AGENT_IPC_CHANNELS.getState,
+        AGENT_IPC_CHANNELS.cancelSchedule,
+        AGENT_IPC_CHANNELS.quit,
+      ].sort(),
     );
     expect(preload).toContain('showConsentStatus');
     expect(preload).toContain('state.consent ?? UNKNOWN_CONSENT');
@@ -45,9 +50,10 @@ describe('renderer (classic script, no injection)', () => {
     expect(renderer).not.toMatch(/\bfetch\(|XMLHttpRequest|WebSocket/);
   });
 
-  it('uses only the four bridge functions', () => {
+  it('uses only the five bridge functions (no new renderer capability)', () => {
     const calls = [...renderer.matchAll(/bridge\s*\.\s*(\w+)\(/g)].map((match) => match[1]);
     expect([...new Set(calls)].sort()).toEqual([
+      'cancelSchedule',
       'endFocus',
       'getState',
       'quit',
@@ -100,6 +106,12 @@ describe('window HTML + CSP (SEC-8)', () => {
     expect(html).toContain('Allow-list (read-only)');
     expect(html).toContain('id="end-focus"');
     expect(html).toContain('Protected apps can never be removed or moved aside.');
+  });
+
+  it('declares the scheduled-session heads-up with its cancel button', () => {
+    expect(html).toContain('id="schedule-section"');
+    expect(html).toContain('id="schedule-cancel"');
+    expect(html).toContain('Cancel scheduled session');
   });
 });
 

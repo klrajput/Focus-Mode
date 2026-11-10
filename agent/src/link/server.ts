@@ -284,15 +284,40 @@ export class LinkServer {
   }
 
   /**
-   * Called when the agent becomes paired while dashboards are already connected: they could not
-   * receive a challenge earlier, so one is issued now (still single use, still agent-generated).
+   * Called when the agent becomes paired (enroll poll succeeded) while dashboards are already
+   * connected. Those sockets got an unpaired `hello` and no challenge, so a fresh `hello` (now
+   * `paired: true`) and a fresh single-use `challenge` are re-issued on every unauthenticated
+   * socket — the dashboard can re-handshake without a page reload (KI-010 agent half, FR-004).
+   * Authenticated sockets are untouched: their attestation is still valid.
    */
   refreshPairing(): void {
     const binding = this.#pairing();
     if (binding === null) return;
     for (const [socket, state] of this.#connections) {
-      if (state.authenticated || state.nonce !== null) continue;
+      if (state.authenticated) continue;
+      // hello first: it is what tells the dashboard the pairing state actually changed.
+      this.#send(socket, buildHello(this.#options.getSnapshot(), this.#options.identity));
       this.#issueChallenge(socket, state);
+    }
+  }
+
+  /**
+   * Called on `revoked`/unpair (`CloudClient` `revoked` event). The frozen local protocol has no
+   * "unpaired" frame, so the honest signal is a policy close (`1008`, contract §4.2/§4.7): every
+   * dashboard resets its handshake and reconnects, then receives `hello {paired: false}` and shows
+   * "Not paired" instead of a stale "Connected" badge. A close is also the only way to invalidate
+   * an attestation that was bound to a device token that no longer exists.
+   */
+  notifyUnpaired(reason = 'UNPAIRED'): void {
+    if (this.#connections.size === 0) return;
+    this.#logger.info('Closing dashboard links because this device is no longer paired', {
+      reason,
+      sockets: this.#connections.size,
+    });
+    for (const [socket, state] of this.#connections) {
+      state.authenticated = false;
+      state.nonce = null;
+      if (socket.readyState === WebSocket.OPEN) socket.close(1008, reason);
     }
   }
 

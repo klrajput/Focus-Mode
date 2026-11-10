@@ -95,6 +95,12 @@ const rawEnvSchema = z.object({
   AGENT_SMOKE: booleanSchema,
   /** REC-005 re-aside poll window (1–2 s). Out-of-range values fail fast instead of drifting. */
   AGENT_ENFORCE_INTERVAL_MS: z.coerce.number().int().min(1000).max(2000).default(1500),
+  /**
+   * DEC-021/FR-012: the cancellable scheduled-session heads-up. The contract requires **≥10 s**,
+   * so a smaller value is rejected at startup rather than silently weakening the user's escape
+   * window; unit tests inject a short window directly instead of going through the environment.
+   */
+  AGENT_SCHEDULE_HEADSUP_MS: z.coerce.number().int().min(10_000).max(120_000).default(10_000),
   AGENT_API_BASE_URL: z.string().min(1).optional(),
   /** Test/dev override for `app.getPath('userData')` — journal and logs live under it. */
   AGENT_USER_DATA_DIR: z.string().min(1).optional(),
@@ -109,6 +115,7 @@ export interface AgentConfig {
   readonly headless: boolean;
   readonly smoke: boolean;
   readonly enforceIntervalMs: number;
+  readonly scheduleHeadsUpMs: number;
   readonly apiBaseUrl?: string;
   readonly userDataDir?: string;
 }
@@ -167,6 +174,7 @@ export function parseAgentEnv(source: NodeJS.ProcessEnv): AgentConfig {
     headless: value.AGENT_HEADLESS,
     smoke: value.AGENT_SMOKE,
     enforceIntervalMs: value.AGENT_ENFORCE_INTERVAL_MS,
+    scheduleHeadsUpMs: value.AGENT_SCHEDULE_HEADSUP_MS,
     ...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
     ...(value.AGENT_USER_DATA_DIR === undefined ? {} : { userDataDir: value.AGENT_USER_DATA_DIR }),
   });

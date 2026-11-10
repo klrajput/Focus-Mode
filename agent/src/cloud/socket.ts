@@ -15,6 +15,7 @@ import {
 } from '@focus-mode/shared';
 import { WebSocket, type RawData } from 'ws';
 import { noopLogger, type Logger } from '../log.js';
+import { nextCloudMessageId } from './message-id.js';
 import { agentLinkUrl } from './transport.js';
 import { Backoff, type BackoffOptions } from './poll.js';
 
@@ -54,13 +55,6 @@ export interface CloudLinkSocketOptions {
   readonly logger?: Logger;
   readonly heartbeatIntervalMs?: number;
   readonly reconnect?: Partial<BackoffOptions>;
-}
-
-let cloudMessageCounter = 0;
-
-function nextCloudMessageId(): string {
-  cloudMessageCounter += 1;
-  return `c-${Date.now().toString(36)}-${cloudMessageCounter.toString(36)}`;
 }
 
 function toText(data: RawData): string {
@@ -109,6 +103,24 @@ export class CloudLinkSocket {
     if (this.#socket !== undefined || this.#reconnectTimer !== undefined) return;
     this.#stopped = false;
     this.#connect();
+  }
+
+  /**
+   * Sends one agent → cloud frame (session reports, `scheduleRunCancelled`). Returns `false` when
+   * the link is not open, so the caller can queue the report instead of losing it silently. A
+   * cloud → agent type is refused here as well as on the inbound path (INV-2 is symmetric).
+   */
+  send(message: CloudMessage): boolean {
+    const socket = this.#socket;
+    if (socket === undefined || socket.readyState !== WebSocket.OPEN) return false;
+    if (CLOUD_MESSAGE_DIRECTIONS[message.type] !== 'AGENT_TO_CLOUD') {
+      this.#logger.warn('Refused to send a cloud→agent message back to the cloud (INV-2)', {
+        type: message.type,
+      });
+      return false;
+    }
+    socket.send(JSON.stringify(message));
+    return true;
   }
 
   stop(): void {

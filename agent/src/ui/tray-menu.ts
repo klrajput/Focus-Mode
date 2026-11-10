@@ -7,6 +7,8 @@
 
 import type { AgentState, FocusSource } from '@focus-mode/shared';
 import {
+  SCHEDULE_CANCEL_HINT,
+  SCHEDULE_CANCEL_LABEL,
   START_AT_LOGIN_TRAY_HINT,
   dateLabel,
   formatCountdown,
@@ -14,6 +16,7 @@ import {
   startAtLoginView,
   type CloudLinkStatus,
   type ConsentStatusView,
+  type PendingScheduleInput,
 } from './view-state.js';
 
 /** Icon variants required by docs/UX_SPEC.md §7.2 (outline / filled / grey slash). */
@@ -21,7 +24,13 @@ export type TrayIconState = 'idle' | 'focusing' | 'disconnected';
 
 /** Actions the tray asks the main process to perform; tray.ts maps them to callbacks. */
 export type TrayAction =
-  'end-focus' | 'show-window' | 'show-pairing-code' | 'reset-consent' | 'start-at-login' | 'quit';
+  | 'end-focus'
+  | 'cancel-schedule'
+  | 'show-window'
+  | 'show-pairing-code'
+  | 'reset-consent'
+  | 'start-at-login'
+  | 'quit';
 
 /** Every action that is a plain menu item (the checkbox is the only non-action control). */
 export type TrayActionButton = Exclude<TrayAction, 'start-at-login'>;
@@ -54,6 +63,11 @@ export interface TrayViewState {
   readonly cloud?: CloudLinkStatus;
   /** Optional: first-run permission record (REC-004); absent renders "not reported". */
   readonly consent?: ConsentStatusView | null;
+  /**
+   * DEC-021/T-064: the scheduled run inside its cancellable heads-up. When present the menu shows
+   * the countdown and a Cancel action — the tray must always be able to stop it (FR-012).
+   */
+  readonly pendingSchedule?: PendingScheduleInput | null;
 }
 
 export interface TrayMenuInput extends TrayViewState {
@@ -127,6 +141,27 @@ export function buildTrayMenu(input: TrayMenuInput): TrayMenuModel {
   // 1. State line (also the tooltip; the icon is never the only signal).
   entries.push({ kind: 'label', label: `Focus Mode — ${stateLabel}` });
   if (focusing) entries.push({ kind: 'label', label: focusLine(input, now) });
+
+  // 1b. Scheduled-session heads-up (DEC-021/FR-012): countdown + an always-enabled Cancel. The
+  //     tray is the second cancel surface next to the window, so a scheduled start is never
+  //     invisible or unstoppable while the dashboard is closed.
+  const pending = input.pendingSchedule ?? null;
+  if (pending !== null) {
+    const countdown = formatCountdown(pending.startsAt, now);
+    entries.push({
+      kind: 'label',
+      label: countdown.expired
+        ? `● Scheduled session starting now (${pending.durationMin} min)`
+        : `● Scheduled session starts in ${countdown.text} (${pending.durationMin} min)`,
+    });
+    entries.push({
+      kind: 'action',
+      action: 'cancel-schedule',
+      label: SCHEDULE_CANCEL_LABEL,
+      enabled: true,
+    });
+    entries.push({ kind: 'label', label: SCHEDULE_CANCEL_HINT });
+  }
 
   // 2. The always-reachable escape hatch (INV-5): enabled only while FOCUSING, but never absent.
   entries.push({

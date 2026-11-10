@@ -185,6 +185,32 @@ describe('FocusController.enterFocus', () => {
     expect(harness.events[0]).toMatchObject({ type: 'focusStarted', sessionId: SESSION_ID });
   });
 
+  it('carries the planned duration and the schedule run id in the started event (T-069/DEC-021)', async () => {
+    const harness = makeHarness({});
+    const runId = '507f1f77bcf86cd799439014';
+    await harness.controller.enterFocus(
+      request({ durationMin: 25, source: 'SCHEDULE', scheduleRunId: runId }),
+    );
+
+    // The cloud report is built from this event, so both fields must be present and honest.
+    expect(harness.events[0]).toMatchObject({
+      type: 'focusStarted',
+      sessionId: SESSION_ID,
+      plannedMinutes: 25,
+      source: 'SCHEDULE',
+      scheduleRunId: runId,
+    });
+  });
+
+  it('omits scheduleRunId for a manual session (backward-compatible report)', async () => {
+    const harness = makeHarness({});
+    await harness.controller.enterFocus(request({ durationMin: 45 }));
+
+    const started = harness.events[0];
+    expect(started).toMatchObject({ type: 'focusStarted', plannedMinutes: 45, source: 'MANUAL' });
+    expect(started !== undefined && 'scheduleRunId' in started).toBe(false);
+  });
+
   it('never asks the driver to aside a protected app, even when it is in the allow-list', async () => {
     const harness = makeHarness({});
     const snapshot = await harness.controller.enterFocus(

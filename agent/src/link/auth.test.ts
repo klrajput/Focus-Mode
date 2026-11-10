@@ -352,7 +352,7 @@ describe('control gating (REC-003, NFR-010)', () => {
     }
   });
 
-  it('refreshes already-connected sockets with a challenge once the agent pairs', async () => {
+  it('refreshes already-connected sockets with a hello + challenge once the agent pairs', async () => {
     let binding: { deviceId: string; userId: string } | null = null;
     const { address, server } = await startLink({
       getPairing: () => binding,
@@ -370,6 +370,11 @@ describe('control gating (REC-003, NFR-010)', () => {
     binding = { deviceId: DEVICE_ID, userId: USER_ID };
     server.refreshPairing();
 
+    // KI-010 agent half: the dashboard must learn that the pairing changed without a page reload,
+    // so a fresh `hello {paired:true}` precedes the new single-use nonce.
+    const refreshed = helloMessageSchema.parse(await client.next());
+    expect(refreshed.paired).toBe(true);
+    expect(refreshed.state).toBe('PAIRED');
     const challenge = challengeMessageSchema.parse(await client.next());
     expect(challenge.nonce).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
   });

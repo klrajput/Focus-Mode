@@ -11,11 +11,13 @@ import {
   AGENT_IPC_CHANNELS,
   AGENT_STATE_HEADLINES,
   PROTECTED_EXPLANATION,
+  SCHEDULE_CANCEL_LABEL,
   START_AT_LOGIN_DEFAULT,
   START_AT_LOGIN_EXPLANATION,
   allowListCountLine,
   buildAgentWindowView,
   buildAllowListView,
+  buildPendingScheduleView,
   dateLabel,
   describeConsent,
   formatClock,
@@ -364,12 +366,55 @@ describe('start at login (REC-008)', () => {
   });
 });
 
+describe('scheduled-session heads-up view (DEC-021, T-064)', () => {
+  const now = new Date('2026-11-10T10:00:02.000Z');
+  const pending = {
+    runId: '507f1f77bcf86cd799439014',
+    scheduleId: '507f1f77bcf86cd799439013',
+    durationMin: 25,
+    startsAt: '2026-11-10T10:00:10.000Z',
+  };
+
+  it('derives the countdown from the absolute start time, not a local decrement', () => {
+    const view = buildPendingScheduleView(pending, now);
+    expect(view.remaining).toBe('00:08');
+    expect(view.remainingLine).toBe('Starts in 00:08 — 25 min session');
+    expect(view.cancelLabel).toBe(SCHEDULE_CANCEL_LABEL);
+    expect(view.remainingLine).toContain('25 min session');
+  });
+
+  it('says "starting now" once the window reached its start time', () => {
+    const view = buildPendingScheduleView(pending, new Date('2026-11-10T10:00:10.000Z'));
+    expect(view.remaining).toBe('00:00');
+    expect(view.remainingLine).toBe('Starting now — 25 min session');
+  });
+
+  it('exposes the pending run on the window view so it is visible and assertable', () => {
+    const state = makeState({ state: 'PAIRED', paired: true, pendingSchedule: pending });
+    const view = buildAgentWindowView(state, now);
+    expect(view.pendingSchedule).toMatchObject({ runId: pending.runId, durationMin: 25 });
+    expect(view.phase).toBe('PAIRED');
+  });
+
+  it('reports no heads-up when nothing is pending', () => {
+    const view = buildAgentWindowView(makeState({ pendingSchedule: null }), now);
+    expect(view.pendingSchedule).toBeNull();
+  });
+});
+
 describe('IPC contract and renderer copy stay in sync', () => {
   const read = (name: string): string =>
     readFileSync(new URL(name, import.meta.url), 'utf8').replace(/\s+/g, ' ');
 
-  it('freezes exactly three IPC channels (the consent read reuses getState)', () => {
-    expect(Object.keys(AGENT_IPC_CHANNELS).sort()).toEqual(['endFocus', 'getState', 'quit']);
+  it('freezes exactly four IPC channels (the consent read reuses getState)', () => {
+    // DEC-021 added `cancelSchedule` — cancelling the heads-up must be reachable from the window.
+    expect(Object.keys(AGENT_IPC_CHANNELS).sort()).toEqual([
+      'cancelSchedule',
+      'endFocus',
+      'getState',
+      'quit',
+    ]);
+    expect(AGENT_IPC_CHANNELS.cancelSchedule).toBe('agent:cancel-schedule');
   });
 
   it('keeps the renderer copy aligned with this module', () => {
@@ -384,6 +429,9 @@ describe('IPC contract and renderer copy stay in sync', () => {
       'Focus Mode never starts itself.',
       'No API base URL is set, so this Focus Agent cannot pair or receive scheduled sessions.',
       'Time is up — restoring your windows',
+      'Cancel scheduled session',
+      'cancelling starts nothing and moves no windows',
+      'You can also cancel from the Focus Agent tray menu until the countdown reaches zero.',
     ]) {
       expect(renderer, phrase).toContain(phrase);
     }
@@ -398,8 +446,13 @@ describe('IPC contract and renderer copy stay in sync', () => {
       'Start at login',
       'First-run permission:',
       'Quit Focus Agent',
+      'Scheduled focus session',
+      'Cancel scheduled session',
+      'You can also cancel from the Focus Agent tray menu until the countdown reaches zero.',
     ]) {
       expect(html, phrase).toContain(phrase);
     }
+    // The heads-up must be hidden until a run is actually pending.
+    expect(html).toMatch(/id="schedule-section"[^>]*hidden/);
   });
 });
