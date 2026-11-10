@@ -27,6 +27,7 @@ import { AppError } from '../utils/AppError.js';
 import { duplicateKeyFields, isDuplicateKeyError } from '../utils/mongo-errors.js';
 import { buildPaginated, pageSkip } from '../utils/pagination.js';
 import { escapeRegex } from '../utils/search.js';
+import { toObjectIdOrNotFound } from '../utils/object-id.js';
 import { toIsoString } from '../utils/serialize.js';
 
 /** Clock-skew tolerance for a `startedAt`/`endedAt` in the future (device clocks may drift). */
@@ -86,7 +87,8 @@ export function toPublicSession(session: SessionLike): PublicSession {
 }
 
 function toObjectId(value: string): Types.ObjectId {
-  return new Types.ObjectId(value);
+  // W6/SEC-9: malformed path/owner ids are 404s from a safe parser, never a cast 500.
+  return toObjectIdOrNotFound(value);
 }
 
 function roundMinutes(value: number): number {

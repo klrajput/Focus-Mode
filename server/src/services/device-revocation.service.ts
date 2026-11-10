@@ -8,12 +8,12 @@
 // deleting is idempotent from the client's perspective (second DELETE → 404 NOT_FOUND).
 // `revokeAllDevicesForUser` (FR-029/T-072) applies exactly the same order to every owned device.
 
-import { Types } from 'mongoose';
 import { ERROR_CODES } from '@focus-mode/shared';
 import { logger } from '../config/logger.js';
 import { Device } from '../models/Device.js';
 import { revokeDevice as pushRevokeToAgent } from '../realtime/agentHub.js';
 import { AppError } from '../utils/AppError.js';
+import { toObjectIdOrNotFound } from '../utils/object-id.js';
 
 /** Success payload of `DELETE /devices/:id` (contract §3.1 #10). */
 export interface RevokedDevice {
@@ -27,8 +27,9 @@ export interface RevokedDevice {
  * needs to close the live socket; its own DB status write then becomes a harmless no-op.
  */
 export async function revokeOwnedDevice(userId: string, deviceId: string): Promise<RevokedDevice> {
-  const deviceObjectId = new Types.ObjectId(deviceId);
-  const ownerObjectId = new Types.ObjectId(userId);
+  // W6/SEC-9: both ids come from auth/path; a malformed device id is a missing device (404).
+  const deviceObjectId = toObjectIdOrNotFound(deviceId, 'Device not found.');
+  const ownerObjectId = toObjectIdOrNotFound(userId);
 
   const device = await Device.findOne({ _id: deviceObjectId, ownerId: ownerObjectId });
   if (device === null) {
@@ -55,16 +56,25 @@ export interface UnpairAllResult {
  * row (and therefore its token hash) is deleted. Offline devices are still revoked in the DB.
  */
 export async function revokeAllDevicesForUser(userId: string): Promise<UnpairAllResult> {
-  const ownerObjectId = new Types.ObjectId(userId);
+  const ownerObjectId = toObjectIdOrNotFound(userId);
   const devices = await Device.find({ ownerId: ownerObjectId }).select('_id').lean();
 
   let unpaired = 0;
   for (const device of devices) {
     const deviceId = String(device._id);
-    const delivered = await pushRevokeToAgent(deviceId);
-    await Device.deleteOne({ _id: device._id, ownerId: ownerObjectId });
-    unpaired += 1;
-    logger.info({ deviceId, delivered }, 'device revoked by unpair-all');
+    try {
+      const delivered = await pushRevokeToAgent(deviceId);
+      await Device.deleteOne({ _id: device._id, ownerId: ownerObjectId });
+      unpaired += 1;
+      logger.info({ deviceId, delivered }, 'device revoked by unpair-all');
+    } catch (error) {
+      // Best effort per device: one failed push/delete must not abort the remaining devices.
+      // The row stays paired, so a retried `unpair-all` is idempotent and finishes the job.
+      logger.warn(
+        { err: error, deviceId },
+        'unpair-all failed for one device — continuing with the rest (retry is idempotent)',
+      );
+    }
   }
   return { unpaired };
 }

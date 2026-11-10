@@ -53,7 +53,7 @@ export interface InsightsDailyPoint {
   minutes: number;
 }
 
-/** Additive W5 field: Monday-start weekly buckets for the 30d/90d ranges (contract delta C-21). */
+/** Additive W5 field: Monday-start weekly buckets for the 30d/90d ranges (contract delta C-24). */
 export interface InsightsWeeklyBucket {
   weekStart: string;
   minutes: number;

@@ -13,8 +13,14 @@ import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Express } from 'express';
+import { Types } from 'mongoose';
 import { Device } from '../models/Device.js';
 import { User } from '../models/User.js';
+import {
+  ATTESTATION_TTL_SECONDS,
+  resetAttestationNonceCache,
+  signDeviceAttestation,
+} from '../services/attestation.service.js';
 import {
   bearer,
   clearTestDatabase,
@@ -88,7 +94,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await clearTestDatabase();
-  // Fresh app per test → fresh 30/min/user attest counter and deterministic 429 test.
+  // Fresh app per test → fresh 30/min/user attest counter and deterministic 429 test; the
+  // server-side nonce replay cache is process-local, so reset it for test isolation too.
+  resetAttestationNonceCache();
   app = createTestApp();
   const registration = await registerTestUser(app);
   accessToken = registration.response.body.data.accessToken as string;
@@ -213,14 +221,63 @@ describe('POST /api/v1/devices/:id/attest (contract §3.1 #11, REC-003)', () => 
   });
 
   it('enforces 30 attestation requests per minute per user (31st → 429)', async () => {
+    // A distinct nonce per request: the same nonce is now single-use (W6/SEC-7) and would 409.
+    const nonceForAttempt = (attempt: number): string =>
+      `nonce-${String(attempt).padStart(20, '0')}`;
     for (let attempt = 1; attempt <= 30; attempt += 1) {
-      const response = await attest(TEST_NONCE);
+      const response = await attest(nonceForAttempt(attempt));
       expect(response.status).toBe(200);
     }
 
-    const throttled = await attest(TEST_NONCE);
+    const throttled = await attest(nonceForAttempt(31));
 
     expect(throttled.status).toBe(429);
     expect(throttled.body.error.code).toBe('RATE_LIMITED');
+  });
+});
+
+describe('attestation nonce replay hardening (W6/SEC-7, delta C-25)', () => {
+  it('rejects a replayed (userId, deviceId, nonce) tuple with 409 CONFLICT', async () => {
+    const first = await attest(TEST_NONCE);
+    expect(first.status).toBe(200);
+
+    const replay = await attest(TEST_NONCE);
+
+    expect(replay.status).toBe(409);
+    expect(replay.body.success).toBe(false);
+    expect(replay.body.error.code).toBe('CONFLICT');
+    expect(replay.body.error.message).toContain('already used');
+    expect(replay.body.data).toBeUndefined();
+
+    // A fresh challenge nonce still works for the same device.
+    const fresh = await attest('nonce-fedcba9876543210');
+    expect(fresh.status).toBe(200);
+  });
+
+  it('allows the same nonce again after the 60 s attestation TTL has elapsed', () => {
+    resetAttestationNonceCache();
+    const nonce = 'nonce-expiry-0123456789';
+    const nowMs = Date.now();
+
+    const first = signDeviceAttestation({ userId, deviceId, nonce }, { now: () => nowMs });
+    expect(typeof first.attestation).toBe('string');
+    expect(() =>
+      signDeviceAttestation({ userId, deviceId, nonce }, { now: () => nowMs + 1_000 }),
+    ).toThrow(/already used/i);
+
+    const afterTtlMs = nowMs + (ATTESTATION_TTL_SECONDS + 1) * 1000;
+    expect(() =>
+      signDeviceAttestation({ userId, deviceId, nonce }, { now: () => afterTtlMs }),
+    ).not.toThrow();
+  });
+
+  it('scopes the replay cache per user/device (same nonce for another device is allowed)', () => {
+    resetAttestationNonceCache();
+    const nonce = 'nonce-scope-0123456789';
+    const otherDeviceId = new Types.ObjectId().toHexString();
+
+    expect(() => signDeviceAttestation({ userId, deviceId, nonce })).not.toThrow();
+    expect(() => signDeviceAttestation({ userId, deviceId, nonce })).toThrow(/already used/i);
+    expect(() => signDeviceAttestation({ userId, deviceId: otherDeviceId, nonce })).not.toThrow();
   });
 });

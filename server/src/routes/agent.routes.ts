@@ -11,7 +11,10 @@ import { Router } from 'express';
 import { deviceRegisterSchema, enrollPollSchema } from '@focus-mode/shared';
 import { allowlist, attestKey, enrollPoll, register } from '../controllers/agent.controller.js';
 import { requireDeviceToken } from '../middlewares/deviceAuth.js';
-import { createAgentRegisterRateLimiter } from '../middlewares/rateLimit.js';
+import {
+  createAgentRegisterRateLimiter,
+  createPublicRateLimiter,
+} from '../middlewares/rateLimit.js';
 import { validate } from '../middlewares/validate.js';
 
 export function createAgentRouter(): Router {
@@ -23,9 +26,21 @@ export function createAgentRouter(): Router {
     validate(deviceRegisterSchema),
     register,
   );
-  router.post('/enroll/poll', validate(enrollPollSchema), enrollPoll);
-  router.get('/attest-key', attestKey);
-  router.get('/allowlist', requireDeviceToken, allowlist);
+  // W6/SEC-4: unauthenticated/agent-public endpoints get the per-IP public limiter (60/min);
+  // enroll/poll additionally requires the single-use agent-held enroll secret (SEC-6).
+  router.post(
+    '/enroll/poll',
+    createPublicRateLimiter('agent-poll'),
+    validate(enrollPollSchema),
+    enrollPoll,
+  );
+  router.get('/attest-key', createPublicRateLimiter('agent-attest-key'), attestKey);
+  router.get(
+    '/allowlist',
+    requireDeviceToken,
+    createPublicRateLimiter('agent-allowlist'),
+    allowlist,
+  );
 
   return router;
 }

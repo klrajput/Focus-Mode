@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { list, markRead } from '../controllers/notifications.controller.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { createNotificationsRateLimiter } from '../middlewares/rateLimit.js';
 import { validateQuery } from '../middlewares/validate.js';
 import { pageLimitQuerySchema } from '../utils/pagination.js';
 
@@ -14,6 +15,8 @@ export function createNotificationsRouter(): Router {
   const router = Router();
 
   router.use(requireAuth, requireRole('USER'));
+  // W6/SEC-4: per-user limit for bell polling (default 120/min).
+  router.use(createNotificationsRateLimiter());
   router.get('/', validateQuery(pageLimitQuerySchema), list);
   router.patch('/:id/read', markRead);
 

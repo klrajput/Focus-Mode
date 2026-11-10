@@ -6,6 +6,7 @@
 // tune middleware (e.g. the auth rate-limit threshold); router order has no overlap between paths.
 
 import { Router } from 'express';
+import { createApiRateLimiter } from '../middlewares/rateLimit.js';
 import { createAdminRouter } from './admin.routes.js';
 import { createAgentRouter } from './agent.routes.js';
 import { createAgentLinksRouter } from './agent-links.routes.js';
@@ -25,6 +26,10 @@ export interface ApiRouterOptions {
 
 export function createApiRouter(options: ApiRouterOptions): Router {
   const router = Router();
+
+  // W6/SEC-4: one coarse per-IP flood guard in front of every /api/v1 route; the credential
+  // routes additionally have their own stricter contract limiters inside their routers.
+  router.use(createApiRateLimiter());
 
   router.use('/auth', createAuthRouter({ rateLimitMax: options.authRateLimitMax }));
   router.use('/devices', createDevicesRouter());

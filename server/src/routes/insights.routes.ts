@@ -7,12 +7,15 @@ import { Router } from 'express';
 import { insightsQuerySchema } from '@focus-mode/shared';
 import { get } from '../controllers/insights.controller.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { createInsightsRateLimiter } from '../middlewares/rateLimit.js';
 import { validateQuery } from '../middlewares/validate.js';
 
 export function createInsightsRouter(): Router {
   const router = Router();
 
   router.use(requireAuth, requireRole('USER'));
+  // W6/SEC-4: analytics aggregation is CPU-heavy → per-user limit (default 60/min).
+  router.use(createInsightsRateLimiter());
   router.get('/', validateQuery(insightsQuerySchema), get);
 
   return router;

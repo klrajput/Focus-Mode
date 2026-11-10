@@ -32,6 +32,7 @@ import {
   stats,
 } from '../controllers/admin.controller.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { createAdminRateLimiter } from '../middlewares/rateLimit.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
 import { pageLimitQuerySchema } from '../utils/pagination.js';
 
@@ -54,6 +55,8 @@ export function createAdminRouter(): Router {
 
   // Authentication + ADMIN authorisation for every route in this router (401 then 403).
   router.use(requireAuth, requireRole('ADMIN'));
+  // W6/SEC-4: per-admin flood guard for the whole admin surface (default 120/min).
+  router.use(createAdminRateLimiter());
 
   router.get('/users', validateQuery(adminUsersQuerySchema), listUsers);
   router.patch('/users/:id', validate(adminUserPatchSchema), patchUser);

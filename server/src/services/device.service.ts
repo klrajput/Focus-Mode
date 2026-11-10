@@ -16,6 +16,7 @@ import {
 } from '@focus-mode/shared';
 import { Device, type DeviceDocument } from '../models/Device.js';
 import { AppError } from '../utils/AppError.js';
+import { toObjectIdOrNotFound } from '../utils/object-id.js';
 
 /** Device capability summary from the local `hello` message (optional until the agent reports). */
 export interface DeviceCapabilitiesShape {
@@ -63,7 +64,8 @@ function toIsoString(value: unknown): string | null {
 }
 
 function toObjectId(value: string): Types.ObjectId {
-  return new Types.ObjectId(value);
+  // W6/SEC-9: a malformed device id is a missing device (404), never a 500.
+  return toObjectIdOrNotFound(value, 'Device not found.');
 }
 
 /** Whitelist + serialise one device document for API responses. */

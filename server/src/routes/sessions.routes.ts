@@ -12,12 +12,15 @@ import {
 } from '@focus-mode/shared';
 import { active, create, finalise, list } from '../controllers/sessions.controller.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { createSessionsRateLimiter } from '../middlewares/rateLimit.js';
 import { validate, validateQuery } from '../middlewares/validate.js';
 
 export function createSessionsRouter(): Router {
   const router = Router();
 
   router.use(requireAuth, requireRole('USER'));
+  // W6/SEC-4: per-user flood guard for the session surface (default 120/min).
+  router.use(createSessionsRateLimiter());
 
   router.get('/active', active);
   router.post('/', validate(sessionCreateSchema), create);

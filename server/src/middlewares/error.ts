@@ -18,6 +18,7 @@ import { AppError } from '../utils/AppError.js';
 import {
   duplicateKeyFields,
   isDuplicateKeyError,
+  isInvalidObjectIdError,
   isMongooseValidationError,
   mongooseValidationDetails,
 } from '../utils/mongo-errors.js';
@@ -103,6 +104,10 @@ function normalizeError(error: unknown): NormalizedError {
       status: 400,
       details: mongooseValidationDetails(error),
     };
+  }
+  // W6/SEC-9: a malformed ObjectId in a URL path is a missing resource, never a cast 500.
+  if (isInvalidObjectIdError(error)) {
+    return { code: ERROR_CODES.NOT_FOUND, message: 'Resource not found.', status: 404 };
   }
   const bodyError = normalizeBodyParserError(error);
   if (bodyError) return bodyError;

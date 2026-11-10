@@ -24,6 +24,7 @@ import { buildProtectedAppEntries } from '../models/protected-apps.js';
 import { Preset } from '../models/Preset.js';
 import { AppError } from '../utils/AppError.js';
 import { isDuplicateKeyError } from '../utils/mongo-errors.js';
+import { toObjectIdOrNotFound } from '../utils/object-id.js';
 
 /** Initial allow-list version sent to a freshly paired Focus Agent (INV-3 cache versioning). */
 export const INITIAL_ALLOWLIST_VERSION = 1;
@@ -204,7 +205,7 @@ export async function applyPresetToAllowlist(
   presetId: string,
   mode: PresetApplyMode,
 ): Promise<PublicAllowlist> {
-  const preset = await Preset.findById(presetId);
+  const preset = await Preset.findById(toObjectIdOrNotFound(presetId, 'Preset not found.'));
   if (preset === null) {
     throw new AppError(ERROR_CODES.NOT_FOUND, 'Preset not found.');
   }

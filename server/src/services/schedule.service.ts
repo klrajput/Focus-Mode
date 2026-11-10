@@ -15,6 +15,7 @@ import {
 } from '@focus-mode/shared';
 import { Schedule } from '../models/Schedule.js';
 import { AppError } from '../utils/AppError.js';
+import { toObjectIdOrNotFound } from '../utils/object-id.js';
 import { buildPaginated, pageSkip, type PageLimitQuery } from '../utils/pagination.js';
 import { toIsoString } from '../utils/serialize.js';
 
@@ -56,7 +57,8 @@ export function toPublicSchedule(schedule: ScheduleLike): PublicSchedule {
 }
 
 function toObjectId(value: string): Types.ObjectId {
-  return new Types.ObjectId(value);
+  // W6/SEC-9: a malformed schedule id is a missing schedule (404), never a 500.
+  return toObjectIdOrNotFound(value, 'Schedule not found.');
 }
 
 /** GET /schedules — the user's schedules ordered by start time (then id for determinism). */
