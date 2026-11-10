@@ -103,6 +103,11 @@ linux:
   category: Utility
   maintainer: Focus Mode Team <team@focusmode.invalid>
   synopsis: Timed focus sessions that step other apps aside on your own machine
+  # The npm package name is scoped (`@focus-mode/agent`), and electron-builder's derived
+  # executable name would be `@focus-modeagent` — the AppImage/deb builder rejects `@` in a file
+  # path ("executableName contains characters that cannot be safely used in file paths", first W4
+  # dispatch). Pin a plain path-safe name instead.
+  executableName: focus-mode-agent
   description: >-
     Focus Mode Agent enforces a timed focus session on the machine it is installed on:
     it steps other apps aside while the dashboard and allow-listed apps stay available,

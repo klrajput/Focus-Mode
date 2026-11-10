@@ -83,17 +83,43 @@ jobs:
       - name: Build Focus Agent
         run: npm run build --workspace agent
 
+      # Optional signing must be *absent* when the secrets are not configured: passing
+      # `CSC_LINK: ''` makes electron-builder treat it as a configured certificate and fail on
+      # macOS with "/…/agent not a file" (observed in the first W4 dispatch). Export only values
+      # that actually exist; absent secrets mean a genuinely unsigned build.
+      - name: Configure optional signing environment
+        shell: bash
+        env:
+          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CSC_LINK_SECRET:-}" ]; then
+            {
+              echo "CSC_LINK=${CSC_LINK_SECRET}"
+              echo "CSC_KEY_PASSWORD=${CSC_KEY_PASSWORD_SECRET:-}"
+            } >> "$GITHUB_ENV"
+            echo "code signing: enabled (certificate supplied via repository secrets)"
+          else
+            echo "code signing: disabled (no CSC_LINK secret) — building UNSIGNED, as documented"
+          fi
+          if [ -n "${APPLE_ID_SECRET:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD_SECRET:-}" ] && [ -n "${APPLE_TEAM_ID_SECRET:-}" ]; then
+            {
+              echo "APPLE_ID=${APPLE_ID_SECRET}"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=${APPLE_APP_SPECIFIC_PASSWORD_SECRET}"
+              echo "APPLE_TEAM_ID=${APPLE_TEAM_ID_SECRET}"
+            } >> "$GITHUB_ENV"
+            echo "notarisation: enabled (APPLE_* secrets supplied)"
+          else
+            echo "notarisation: disabled (APPLE_* secrets absent) — no signing identity is imported"
+          fi
+
       - name: Build installers
         working-directory: agent
-        env:
-          # Optional code signing. Unset/empty secrets = unsigned build, which must still pass.
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # Optional macOS notarisation. electron-builder only runs @electron/notarize when all
-          # three values below are present; no `mac.notarize: false` override is set (T-110).
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Signing/notarisation env comes from the previous step via $GITHUB_ENV (only when set).
         run: npx electron-builder ${{ matrix.args }} --publish never
 
       - name: List produced artifacts
