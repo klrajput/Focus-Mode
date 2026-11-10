@@ -29,8 +29,27 @@ describe('parseAgentEnv', () => {
     expect(config.allowedOrigins).toEqual(['http://localhost:5173']);
     expect(config.headless).toBe(false);
     expect(config.logLevel).toBe('info');
+    expect(config.smoke).toBe(false);
+    expect(config.enforceIntervalMs).toBe(1500);
     expect(config.apiBaseUrl).toBeUndefined();
     expect(config.userDataDir).toBeUndefined();
+  });
+
+  it('parses the T-113 smoke hook and the REC-005 enforcement interval', () => {
+    const config = parseAgentEnv({
+      AGENT_SMOKE: '1',
+      AGENT_ENFORCE_INTERVAL_MS: '2000',
+      AGENT_HEADLESS: '1',
+    });
+    expect(config.smoke).toBe(true);
+    expect(config.enforceIntervalMs).toBe(2000);
+    expect(config.headless).toBe(true);
+  });
+
+  it('rejects an enforcement interval outside the REC-005 1–2 s window', () => {
+    for (const interval of ['999', '2001', 'abc', '0']) {
+      expect(() => parseAgentEnv({ AGENT_ENFORCE_INTERVAL_MS: interval })).toThrow(AgentEnvError);
+    }
   });
 
   it('parses strings from process.env style values', () => {
@@ -40,6 +59,8 @@ describe('parseAgentEnv', () => {
       AGENT_FOCUS_DRIVER: 'fake',
       AGENT_LOG_LEVEL: 'debug',
       AGENT_HEADLESS: '1',
+      AGENT_SMOKE: '1',
+      AGENT_ENFORCE_INTERVAL_MS: '1200',
       AGENT_API_BASE_URL: 'https://api.focus.example.com/api/v1/',
       AGENT_USER_DATA_DIR: '/tmp/focus-agent-test',
     });
@@ -47,6 +68,8 @@ describe('parseAgentEnv', () => {
     expect(config.driver).toBe('fake');
     expect(config.logLevel).toBe('debug');
     expect(config.headless).toBe(true);
+    expect(config.smoke).toBe(true);
+    expect(config.enforceIntervalMs).toBe(1200);
     expect(config.allowedOrigins).toEqual(['https://focus.example.com', 'http://localhost:5173']);
     expect(config.apiBaseUrl).toBe('https://api.focus.example.com/api/v1');
     expect(config.userDataDir).toBe('/tmp/focus-agent-test');

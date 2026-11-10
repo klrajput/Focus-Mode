@@ -6,6 +6,7 @@
 
 import {
   appEntrySchema,
+  appKeySchema,
   consentSchema,
   durationMinSchema,
   focusSourceSchema,
@@ -16,13 +17,16 @@ import {
   type EndReason,
   type FocusSource,
   type OsName,
+  type RunningApp,
   type SessionInfo,
 } from '@focus-mode/shared';
 import { z } from 'zod';
 import { computeFocusCandidates, sanitizeAllowList, type WindowRef } from '../allowlist.js';
 import { noopLogger, type Logger } from '../log.js';
 import { AgentStateMachine } from '../state.js';
+import type { ConsentGate } from './consent.js';
 import type { FocusDriver, RestorePlan } from './driver.js';
+import { EnforcementLoop, ENFORCEMENT_DEFAULT_INTERVAL_MS } from './enforce.js';
 import { journalEntrySchema, type FocusJournal, type JournalEntry } from './journal.js';
 
 /** Local-channel rejection codes this controller can raise (TECHNICAL_DESIGN §6.2). */
@@ -42,6 +46,8 @@ const enterFocusRequestSchema = z.strictObject({
   clientSessionId: uuidSchema,
   source: focusSourceSchema.optional(),
   consent: consentSchema.optional(),
+  /** REC-005 "keep distractions aside"; absent means ON (the product default). */
+  reaside: z.boolean().optional(),
 });
 
 export interface EnterFocusRequest {
@@ -49,8 +55,10 @@ export interface EnterFocusRequest {
   readonly allowList: readonly AppEntry[];
   readonly clientSessionId: string;
   readonly source?: FocusSource;
-  /** Carried from the dashboard's consent modal; native first-run consent is REC-004/W3. */
+  /** Carried from the dashboard's consent modal (FR-009); never a substitute for REC-004. */
   readonly consent?: { readonly acceptedAt: string; readonly version: string };
+  /** REC-005; default true. `false` makes the enforcement loop issue zero driver calls. */
+  readonly reaside?: boolean;
 }
 
 /** What the link server/UI may report; session is absent unless a focus session is active. */
@@ -66,6 +74,8 @@ export interface FocusEndedEvent {
   readonly at: string;
   readonly reason: EndReason;
   readonly actualMinutes: number;
+  /** Terminal session status for the cloud report (the local wire frame carries only reason). */
+  readonly status: 'COMPLETED' | 'CANCELLED';
 }
 
 export type FocusLifecycleEvent =
@@ -85,18 +95,33 @@ export interface RecoveryResult {
   readonly restored: boolean;
 }
 
+export interface EnforcementOptions {
+  /** 1–2 s per REC-005; out-of-range values are clamped by `enforce.ts`. */
+  readonly intervalMs?: number;
+}
+
 export interface FocusControllerOptions {
   readonly driver: FocusDriver;
   readonly journal: FocusJournal;
   /** Static protected set for `os`, already merged with runtime additions (allowlist.ts). */
   readonly protectedEntries: readonly AppEntry[];
   readonly os: OsName;
+  /**
+   * Native first-run gate (REC-004). Required on purpose: every `enterFocus` path — dashboard,
+   * scheduled and tray — must pass through the dialog once per device, and making it optional
+   * would let a caller silently skip the only consent a web page cannot answer.
+   */
+  readonly consent: ConsentGate;
   readonly initialPaired?: boolean;
+  /** REC-005 loop tuning; `false` disables re-asiding entirely (tests/QA, never the default). */
+  readonly enforcement?: EnforcementOptions | false;
   readonly now?: () => Date;
   readonly logger?: Logger;
   readonly onEvent?: (event: FocusLifecycleEvent) => void;
   readonly setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   readonly clearTimer?: (handle: ReturnType<typeof setTimeout>) => void;
+  /** Chunking ceiling for the absolute timer (Node clamps >2^31−1 ms); injectable for tests. */
+  readonly maxTimerDelayMs?: number;
 }
 
 interface ActiveSession {
@@ -104,7 +129,13 @@ interface ActiveSession {
   readonly startedAtMs: number;
   readonly endsAtMs: number;
   readonly source: FocusSource;
+  readonly reaside: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+interface ExitOverride {
+  readonly actualMinutesMs?: number;
+  readonly status?: 'COMPLETED' | 'CANCELLED';
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -121,38 +152,98 @@ function roundMinutes(minutes: number): number {
   return Math.round(Math.min(1440, Math.max(0, minutes)) * 10) / 10;
 }
 
+/** Display label for an app key we have no catalogue entry for (`visual-studio-code`). */
+function humanizeAppKey(key: string): string {
+  return key
+    .split('-')
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+    .slice(0, 60);
+}
+
 export class FocusController {
   readonly #driver: FocusDriver;
   readonly #journal: FocusJournal;
   readonly #protectedEntries: readonly AppEntry[];
   readonly #os: OsName;
   readonly #machine: AgentStateMachine;
+  readonly #consent: ConsentGate;
   readonly #now: () => Date;
   readonly #logger: Logger;
   readonly #onEvent: ((event: FocusLifecycleEvent) => void) | undefined;
   readonly #setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   readonly #clearTimer: (handle: ReturnType<typeof setTimeout>) => void;
+  readonly #maxTimerDelayMs: number;
+  readonly #enforcement: EnforcementLoop | undefined;
 
   #allowList: readonly AppEntry[] = [];
   #active: ActiveSession | undefined;
+  #enterInFlight: Promise<FocusSnapshot> | undefined;
   #exitInFlight: Promise<FocusEndedEvent | null> | undefined;
+  /** Recorded on `powerMonitor 'suspend'`; drives the TD §7.4 sleep reconcile. */
+  #suspendAt: Date | undefined;
 
   constructor(options: FocusControllerOptions) {
     this.#driver = options.driver;
     this.#journal = options.journal;
     this.#protectedEntries = options.protectedEntries;
     this.#os = options.os;
+    this.#consent = options.consent;
     this.#machine = new AgentStateMachine(options.initialPaired === true ? 'PAIRED' : 'IDLE');
     this.#now = options.now ?? (() => new Date());
     this.#logger = options.logger ?? noopLogger;
     this.#onEvent = options.onEvent;
     this.#setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.#clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle));
+    this.#maxTimerDelayMs = options.maxTimerDelayMs ?? MAX_TIMER_DELAY_MS;
+    this.#enforcement =
+      options.enforcement === false
+        ? undefined
+        : new EnforcementLoop({
+            driver: this.#driver,
+            journal: this.#journal,
+            protectedEntries: this.#protectedEntries,
+            os: this.#os,
+            isActive: () => this.isFocusing(),
+            intervalMs: options.enforcement?.intervalMs ?? ENFORCEMENT_DEFAULT_INTERVAL_MS,
+            logger: this.#logger,
+            onJournalUpdated: (entry) => {
+              // Keep the in-memory session in step with the journal so exit restores
+              // everything this session moved, including windows re-asided later.
+              if (this.#active !== undefined && this.#active.entry.sessionId === entry.sessionId) {
+                this.#active.entry = entry;
+              }
+            },
+          });
   }
 
   /** Honest capability flag from the active driver (FR-005). */
   capabilities(): AgentCapabilities {
     return this.#driver.capabilities();
+  }
+
+  /**
+   * REC-007 `listApps` answer: app key + human label + running flag only. Derived from the same
+   * window identifiers the driver already exposes, so no window title, URL or content is ever
+   * read (INV-6). Allow-listed apps that are not currently running appear with `running: false`.
+   */
+  async listRunningApps(): Promise<readonly RunningApp[]> {
+    const windows = await this.#driver.listWindows();
+    const runningKeys = new Set(windows.map((window) => window.appKey));
+    const labels = new Map<string, string>();
+    for (const entry of [...this.#protectedEntries, ...this.#allowList]) {
+      labels.set(entry.key, entry.label);
+    }
+    const keys = new Set<string>([...runningKeys, ...this.#allowList.map((entry) => entry.key)]);
+    return [...keys]
+      .filter((key) => appKeySchema.safeParse(key).success)
+      .sort()
+      .map((key) => ({
+        key,
+        label: labels.get(key) ?? humanizeAppKey(key),
+        running: runningKeys.has(key),
+      }));
   }
 
   getState(): FocusSnapshot {
@@ -183,18 +274,90 @@ export class FocusController {
     this.#machine.reset();
   }
 
+  /** True when the native first-run permission for the current version is stored (REC-004). */
+  nativeConsentGranted(): boolean {
+    return this.#consent.isGranted();
+  }
+
+  /** Stored grant (or null) for the agent window/tray; never grants anything by being read. */
+  nativeConsentRecord(): { readonly version: string; readonly acceptedAt: string } | null {
+    return this.#consent.currentRecord();
+  }
+
+  /** Tray/agent-window "Reset focus permission": the next start asks the native dialog again. */
+  revokeNativeConsent(): void {
+    this.#consent.revoke();
+  }
+
   /** Read-only allow-list shown in the agent window; never includes protected entries. */
   setAllowList(allowList: readonly AppEntry[]): void {
     this.#allowList = sanitizeAllowList(allowList, this.#protectedEntries, this.#os);
   }
 
+  /** `powerMonitor 'suspend'` (TD §7.4): remember when the machine went to sleep. */
+  recordSuspend(at: Date = this.#now()): void {
+    this.#suspendAt = at;
+    if (this.isFocusing()) {
+      this.#logger.info('Focus session suspended; deadline stays absolute', {
+        suspendAt: at.toISOString(),
+      });
+    }
+  }
+
   /**
-   * ORDER MATTERS (INV-4): validate → capabilities → list windows → compute candidates →
-   * journal write (fsync+rename) → driver.asideWindows → journal update → timer → event.
-   * A failure after the journal write restores what changed and keeps the journal if restore
-   * failed, so the next start can recover.
+   * `powerMonitor 'resume'` reconcile (TD §7.4, FR-014):
+   * - awake past `endsAt` → end with reason SLEEP; `actualMinutes = (suspendAt − startedAt)`;
+   *   status COMPLETED only when the machine was awake at/after the deadline, else CANCELLED.
+   * - still time left → re-arm the absolute timer and re-apply the aside set immediately.
    */
-  async enterFocus(request: EnterFocusRequest): Promise<FocusSnapshot> {
+  async resumeFromSleep(): Promise<FocusEndedEvent | null> {
+    const suspendAt = this.#suspendAt;
+    this.#suspendAt = undefined;
+    const active = this.#active;
+    if (active === undefined) return null;
+
+    const now = this.#now();
+    const effectiveSuspend = suspendAt ?? now;
+    if (now.getTime() >= active.endsAtMs) {
+      return this.#exitOnce('SLEEP', {
+        actualMinutesMs: effectiveSuspend.getTime() - active.startedAtMs,
+        status: effectiveSuspend.getTime() >= active.endsAtMs ? 'COMPLETED' : 'CANCELLED',
+      });
+    }
+
+    // Remaining time survived the sleep: the absolute deadline still governs the end.
+    this.#clearActiveTimer(active);
+    this.#armTimer(active);
+    if (active.reaside) await this.#enforcement?.tick();
+    this.#logger.info('Focus session resumed with time left', {
+      sessionId: active.entry.sessionId,
+      endsAt: active.entry.endsAt,
+    });
+    return null;
+  }
+
+  /**
+   * ORDER MATTERS (INV-4): validate → capabilities → native consent (REC-004) → list windows →
+   * compute candidates → journal write (fsync+rename) → driver.asideWindows → journal update →
+   * timer → enforcement loop → event. A failure after the journal write restores what changed
+   * and keeps the journal if restore failed, so the next start can recover.
+   */
+  enterFocus(request: EnterFocusRequest): Promise<FocusSnapshot> {
+    // A slow native consent dialog or driver call must not let a second request slip past the
+    // ALREADY_FOCUSING check while the first is still applying focus (FR-024).
+    if (this.#enterInFlight !== undefined) {
+      return Promise.reject(
+        new FocusRejectedError('ALREADY_FOCUSING', 'A focus session is already starting.'),
+      );
+    }
+    const run = this.#performEnterFocus(request).finally(() => {
+      this.#enterInFlight = undefined;
+    });
+    this.#enterInFlight = run;
+    return run;
+  }
+
+  async #performEnterFocus(request: EnterFocusRequest): Promise<FocusSnapshot> {
     const capabilities = this.#driver.capabilities();
     if (capabilities.focus === 'unsupported') {
       throw new FocusRejectedError(
@@ -219,6 +382,22 @@ export class FocusController {
     const valid = parsed.data;
     const allowList = sanitizeAllowList(valid.allowList, this.#protectedEntries, this.#os);
     const source: FocusSource = valid.source ?? 'MANUAL';
+    const reaside = valid.reaside ?? true;
+
+    // REC-004: the first focus on this device also needs the native agent dialog. The
+    // dashboard's `consent` field is shown to the user but can never satisfy this gate.
+    const consent = await this.#consent.ensure({
+      durationMin: valid.durationMin,
+      allowList,
+      protectedApps: this.#protectedEntries,
+      reaside,
+    });
+    if (!consent.granted) {
+      throw new FocusRejectedError(
+        'CONSENT_REQUIRED',
+        'Allow Focus Mode to move other apps aside in the Focus Agent window, then try again.',
+      );
+    }
 
     const startedAt = this.#now();
     const endsAtMs = startedAt.getTime() + valid.durationMin * 60_000;
@@ -273,10 +452,12 @@ export class FocusController {
       startedAtMs: startedAt.getTime(),
       endsAtMs,
       source,
+      reaside,
       timer: undefined,
     };
     this.#machine.markFocusing();
     this.#armTimer(this.#active);
+    if (reaside) this.#enforcement?.start();
     this.#emit({
       type: 'focusStarted',
       sessionId: updatedEntry.sessionId,
@@ -293,9 +474,14 @@ export class FocusController {
    * first restore instead of restoring twice.
    */
   exitFocus(reason: EndReason = 'USER'): Promise<FocusEndedEvent | null> {
+    return this.#exitOnce(reason);
+  }
+
+  /** Single restore path for every trigger, so sleep reconcile and a timer end cannot double-run. */
+  #exitOnce(reason: EndReason, override: ExitOverride = {}): Promise<FocusEndedEvent | null> {
     if (this.#exitInFlight !== undefined) return this.#exitInFlight;
     if (this.#active === undefined) return Promise.resolve(null);
-    const run = this.#performExit(reason).finally(() => {
+    const run = this.#performExit(reason, override).finally(() => {
       this.#exitInFlight = undefined;
     });
     this.#exitInFlight = run;
@@ -310,9 +496,12 @@ export class FocusController {
     const entry = this.#journal.read();
     if (entry === null) return null;
 
-    const actualMinutes = roundMinutes(
-      (this.#now().getTime() - new Date(entry.startedAt).getTime()) / 60_000,
-    );
+    // Honest accounting (FR-028): a crash means we only know the process died somewhere between
+    // `startedAt` and `endsAt`; never count days of downtime as focus minutes.
+    const startedAtMs = new Date(entry.startedAt).getTime();
+    const endsAtMs = new Date(entry.endsAt).getTime();
+    const now = this.#now();
+    const actualMinutes = roundMinutes((Math.min(now.getTime(), endsAtMs) - startedAtMs) / 60_000);
     const restored = await this.#restoreEntry(entry);
     if (restored) {
       try {
@@ -323,9 +512,11 @@ export class FocusController {
       this.#emit({
         type: 'focusEnded',
         sessionId: entry.sessionId,
-        at: this.#now().toISOString(),
+        at: now.toISOString(),
         reason: 'CRASH_RECOVERY',
         actualMinutes,
+        // The session only completed if the process was restored after its deadline.
+        status: now.getTime() >= endsAtMs ? 'COMPLETED' : 'CANCELLED',
       });
     } else {
       this.#logger.error(
@@ -335,25 +526,41 @@ export class FocusController {
     return { sessionId: entry.sessionId, actualMinutes, restored };
   }
 
-  /** Cancels a pending timer (tests and shutdown); never touches windows. */
+  /** Cancels a pending timer and the enforcement loop (tests and shutdown); never touches windows. */
   dispose(): void {
-    if (this.#active?.timer !== undefined) {
-      this.#clearTimer(this.#active.timer);
-      this.#active.timer = undefined;
-    }
+    const active = this.#active;
+    if (active !== undefined) this.#clearActiveTimer(active);
+    void this.#enforcement?.stop();
   }
 
-  async #performExit(reason: EndReason): Promise<FocusEndedEvent | null> {
+  async #performExit(
+    reason: EndReason,
+    override: ExitOverride = {},
+  ): Promise<FocusEndedEvent | null> {
     const active = this.#active;
     if (active === undefined) return null;
 
-    if (active.timer !== undefined) {
-      this.#clearTimer(active.timer);
-      active.timer = undefined;
+    this.#clearActiveTimer(active);
+    // Stop (and await) the enforcement loop before restoring so no late aside can hide a window
+    // after the session ended (INV-5).
+    await this.#enforcement?.stop();
+
+    // Restore exactly what the journal says this session changed. The enforcement loop may have
+    // extended it after `#active.entry` was captured, so the journal is the authority (INV-4).
+    const journaled = this.#journal.read();
+    const entry =
+      journaled !== null && journaled.sessionId === active.entry.sessionId
+        ? journaled
+        : active.entry;
+
+    try {
+      await this.#driver.restore(this.#planFor(entry));
+    } catch (error) {
+      // Restore failed: focus is still applied, so keep re-asiding newly opened apps too.
+      if (active.reaside) this.#enforcement?.start();
+      throw error;
     }
 
-    // Restore BEFORE clearing the journal and before reporting the end (INV-5).
-    await this.#driver.restore(this.#planFor(active.entry));
     try {
       this.#journal.clear();
     } catch (error) {
@@ -362,22 +569,42 @@ export class FocusController {
 
     this.#active = undefined;
     this.#machine.markFocusEnded();
+    const now = this.#now();
     const ended: FocusEndedEvent = {
-      sessionId: active.entry.sessionId,
-      at: this.#now().toISOString(),
+      sessionId: entry.sessionId,
+      at: now.toISOString(),
       reason,
-      actualMinutes: roundMinutes((this.#now().getTime() - active.startedAtMs) / 60_000),
+      actualMinutes: roundMinutes(
+        (override.actualMinutesMs ?? now.getTime() - active.startedAtMs) / 60_000,
+      ),
+      status: override.status ?? (reason === 'COMPLETED' ? 'COMPLETED' : 'CANCELLED'),
     };
     this.#emit({ type: 'focusEnded', ...ended });
     return ended;
   }
 
+  #clearActiveTimer(active: ActiveSession): void {
+    if (active.timer !== undefined) {
+      this.#clearTimer(active.timer);
+      active.timer = undefined;
+    }
+  }
+
+  /**
+   * Absolute `endsAt` deadline, chunked below Node's 2^31−1 ms timer ceiling (TECHNICAL_DESIGN
+   * §7.3): a long session re-arms until the wall clock really passed `endsAt`, so the end never
+   * depends on one timer's maximum delay.
+   */
   #armTimer(active: ActiveSession): void {
     const delayMs = Math.min(
       Math.max(0, active.endsAtMs - this.#now().getTime()),
-      MAX_TIMER_DELAY_MS,
+      this.#maxTimerDelayMs,
     );
     active.timer = this.#setTimer(() => {
+      if (this.#now().getTime() < active.endsAtMs) {
+        this.#armTimer(active);
+        return;
+      }
       void this.exitFocus('COMPLETED').catch((error: unknown) => {
         this.#logger.error('Timer-driven restore failed; journal kept for recovery', error);
       });

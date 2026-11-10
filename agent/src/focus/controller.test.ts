@@ -9,6 +9,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveProtectedEntries, type WindowRef } from '../allowlist.js';
 import type { AppEntry } from '@focus-mode/shared';
+import { ConsentGate, FileConsentStore } from './consent.js';
 import type { FocusDriver, RestorePlan } from './driver.js';
 import { FakeDriver, type FakeWindowSpec } from './drivers/fake.js';
 import { FocusController, FocusRejectedError, type FocusLifecycleEvent } from './controller.js';
@@ -43,6 +44,19 @@ interface Harness {
   readonly driver: FakeDriver;
   readonly journal: FileJournal;
   readonly events: FocusLifecycleEvent[];
+  readonly consent: ConsentGate;
+}
+
+function makeConsent(options: {
+  directory?: string;
+  now?: () => Date;
+  prompt?: () => Promise<boolean>;
+}): ConsentGate {
+  return new ConsentGate({
+    store: new FileConsentStore({ directory: options.directory ?? makeDirectory() }),
+    prompt: options.prompt ?? (async () => true),
+    now: options.now ?? (() => START),
+  });
 }
 
 function makeHarness(options: {
@@ -51,20 +65,30 @@ function makeHarness(options: {
   driver?: FocusDriver;
   journalDirectory?: string;
   now?: () => Date;
+  consentPrompt?: () => Promise<boolean>;
+  enforcement?: false | { intervalMs?: number };
+  maxTimerDelayMs?: number;
 }): Harness {
   const journal = new FileJournal({ directory: options.journalDirectory ?? makeDirectory() });
   const driver = (options.driver ?? new FakeDriver(options.windows ?? WINDOWS)) as FakeDriver;
   const events: FocusLifecycleEvent[] = [];
+  const consent = makeConsent({
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.consentPrompt === undefined ? {} : { prompt: options.consentPrompt }),
+  });
   const controller = new FocusController({
     driver,
     journal,
     protectedEntries: PROTECTED,
     os: 'macOS',
+    consent,
     initialPaired: options.initialPaired ?? true,
+    ...(options.enforcement === undefined ? {} : { enforcement: options.enforcement }),
+    ...(options.maxTimerDelayMs === undefined ? {} : { maxTimerDelayMs: options.maxTimerDelayMs }),
     now: options.now ?? (() => START),
     onEvent: (event) => events.push(event),
   });
-  return { controller, driver, journal, events };
+  return { controller, driver, journal, events, consent };
 }
 
 function request(overrides: Partial<Parameters<FocusController['enterFocus']>[0]> = {}) {
@@ -123,6 +147,7 @@ describe('FocusController.enterFocus', () => {
       journal,
       protectedEntries: PROTECTED,
       os: 'macOS',
+      consent: makeConsent({}),
       initialPaired: true,
       now: () => START,
     });
@@ -246,6 +271,31 @@ describe('FocusController.enterFocus', () => {
     );
     expect(harness.controller.getState().state).toBe('PAIRED');
     expect(harness.journal.read()).toBeNull();
+  });
+
+  it('rejects a second request that arrives while the first is still applying (FR-024)', async () => {
+    let release: (() => void) | undefined;
+    class SlowListDriver extends FakeDriver {
+      override async listWindows(): Promise<readonly WindowRef[]> {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return super.listWindows();
+      }
+    }
+    const harness = makeHarness({ driver: new SlowListDriver(WINDOWS) });
+    const first = harness.controller.enterFocus(request());
+    for (let i = 0; i < 20 && release === undefined; i += 1) await Promise.resolve();
+    expect(release).toBeDefined();
+
+    await expect(
+      harness.controller.enterFocus(request({ clientSessionId: crypto.randomUUID() })),
+    ).rejects.toMatchObject({ code: 'ALREADY_FOCUSING' });
+    expect(harness.controller.isFocusing()).toBe(false);
+
+    release?.();
+    await first;
+    expect(harness.controller.isFocusing()).toBe(true);
   });
 
   it('keeps the journal when a failed apply cannot be restored (next start retries)', async () => {
@@ -395,6 +445,7 @@ describe('FocusController.recoverFromJournal', () => {
       journal,
       protectedEntries: PROTECTED,
       os: 'macOS',
+      consent: makeConsent({}),
       now: () => START,
       onEvent: (event) => events.push(event),
     });
@@ -414,6 +465,7 @@ describe('FocusController.recoverFromJournal', () => {
         at: START.toISOString(),
         reason: 'CRASH_RECOVERY',
         actualMinutes: 30,
+        status: 'CANCELLED',
       },
     ]);
     expect(controller.getState().state).toBe('IDLE');
@@ -453,6 +505,7 @@ describe('FocusController.recoverFromJournal', () => {
       journal,
       protectedEntries: PROTECTED,
       os: 'macOS',
+      consent: makeConsent({}),
       now: () => START,
     });
 

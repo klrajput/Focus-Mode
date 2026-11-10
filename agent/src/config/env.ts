@@ -88,6 +88,13 @@ const rawEnvSchema = z.object({
   AGENT_FOCUS_DRIVER: focusDriverNameSchema.default('real'),
   AGENT_LOG_LEVEL: agentLogLevelSchema.default('info'),
   AGENT_HEADLESS: booleanSchema,
+  /**
+   * T-113 smoke hook: bind the loopback link, print `SMOKE_READY port=<n>`, answer one `hello`
+   * + `getState` and exit 0. Headless by construction (no window, no tray, no cloud pairing).
+   */
+  AGENT_SMOKE: booleanSchema,
+  /** REC-005 re-aside poll window (1–2 s). Out-of-range values fail fast instead of drifting. */
+  AGENT_ENFORCE_INTERVAL_MS: z.coerce.number().int().min(1000).max(2000).default(1500),
   AGENT_API_BASE_URL: z.string().min(1).optional(),
   /** Test/dev override for `app.getPath('userData')` — journal and logs live under it. */
   AGENT_USER_DATA_DIR: z.string().min(1).optional(),
@@ -100,6 +107,8 @@ export interface AgentConfig {
   readonly driver: FocusDriverName;
   readonly logLevel: AgentLogLevel;
   readonly headless: boolean;
+  readonly smoke: boolean;
+  readonly enforceIntervalMs: number;
   readonly apiBaseUrl?: string;
   readonly userDataDir?: string;
 }
@@ -156,6 +165,8 @@ export function parseAgentEnv(source: NodeJS.ProcessEnv): AgentConfig {
     driver: value.AGENT_FOCUS_DRIVER,
     logLevel: value.AGENT_LOG_LEVEL,
     headless: value.AGENT_HEADLESS,
+    smoke: value.AGENT_SMOKE,
+    enforceIntervalMs: value.AGENT_ENFORCE_INTERVAL_MS,
     ...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
     ...(value.AGENT_USER_DATA_DIR === undefined ? {} : { userDataDir: value.AGENT_USER_DATA_DIR }),
   });

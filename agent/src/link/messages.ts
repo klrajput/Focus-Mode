@@ -8,7 +8,9 @@ import {
   authErrorMessageSchema,
   authOkMessageSchema,
   challengeMessageSchema,
+  focusEndedMessageSchema,
   focusRejectedMessageSchema,
+  focusStartedMessageSchema,
   helloMessageSchema,
   stateMessageSchema,
   type AgentCapabilities,
@@ -19,8 +21,10 @@ import {
   type AuthOkMessage,
   type ChallengeMessage,
   type ErrorCode,
+  type FocusEndedMessage,
   type FocusRejectedCode,
   type FocusRejectedMessage,
+  type FocusStartedMessage,
   type HelloMessage,
   type OsName,
   type RunningApp,
@@ -28,13 +32,17 @@ import {
   type StateMessage,
 } from '@focus-mode/shared';
 
-/** The subset of agent truth the link reports (INV-5). Never includes the pairing code. */
-export interface LinkSnapshot {
+/** The `state` frame's subset of agent truth (INV-5). Never includes the pairing code. */
+export interface StateSnapshot {
   readonly state: AgentState;
-  readonly paired: boolean;
   readonly session?: SessionInfo;
   readonly protected: readonly AppEntry[];
   readonly allowList: readonly AppEntry[];
+}
+
+/** `hello` additionally reports whether a device token exists (no code, DEC-003). */
+export interface LinkSnapshot extends StateSnapshot {
+  readonly paired: boolean;
 }
 
 export interface AgentIdentity {
@@ -67,7 +75,6 @@ export function buildHello(snapshot: LinkSnapshot, identity: AgentIdentity): Hel
   });
 }
 
-/** Answer to `getState`; the only supported read in W1 (control messages need attestation). */
 /** Single-use handshake step 2 (contract §4.4); only sent while the agent is paired. */
 export function buildChallenge(nonce: string): ChallengeMessage {
   return challengeMessageSchema.parse({
@@ -110,7 +117,7 @@ export function buildApps(apps: readonly RunningApp[]): AppsMessage {
   });
 }
 
-export function buildState(snapshot: LinkSnapshot): StateMessage {
+export function buildState(snapshot: StateSnapshot): StateMessage {
   return stateMessageSchema.parse({
     v: 1,
     id: nextMessageId('a'),
@@ -119,6 +126,53 @@ export function buildState(snapshot: LinkSnapshot): StateMessage {
     ...(snapshot.session === undefined ? {} : { session: snapshot.session }),
     protected: snapshot.protected,
     allowList: snapshot.allowList,
+  });
+}
+
+/** Structural shape of the controller's started event; keeps this module controller-free. */
+export interface FocusStartedEventLike {
+  readonly sessionId: string;
+  readonly at: string;
+  readonly endsAt: string;
+  readonly source: 'MANUAL' | 'SCHEDULE';
+}
+
+/** Emitted only after the journal write + apply (INV-4); `sessionId` is the clientSessionId. */
+export function buildFocusStarted(
+  event: FocusStartedEventLike,
+  protectedEntries: readonly AppEntry[],
+): FocusStartedMessage {
+  return focusStartedMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'focusStarted',
+    at: event.at,
+    endsAt: event.endsAt,
+    protected: protectedEntries,
+    state: 'FOCUSING',
+    sessionId: event.sessionId,
+    source: event.source,
+  });
+}
+
+/** Structural shape of the controller's ended event (the wire frame carries no `status`). */
+export interface FocusEndedEventLike {
+  readonly sessionId: string;
+  readonly at: string;
+  readonly reason: FocusEndedMessage['reason'];
+  readonly actualMinutes: number;
+}
+
+/** Emitted after restore completed (INV-5); reason covers all end triggers (contract §4.5). */
+export function buildFocusEnded(event: FocusEndedEventLike): FocusEndedMessage {
+  return focusEndedMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'focusEnded',
+    sessionId: event.sessionId,
+    at: event.at,
+    reason: event.reason,
+    actualMinutes: event.actualMinutes,
   });
 }
 
