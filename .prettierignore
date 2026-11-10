@@ -31,3 +31,6 @@ project-blueprint/
 # They are kept byte-stable so parallel doc edits never lose a row; owners run
 # `prettier --write <file>` themselves before committing.
 docs/
+
+# gitleaks config is TOML (no Prettier parser)
+.gitleaks.toml
