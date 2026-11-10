@@ -1,22 +1,25 @@
 /*
- * `/insights` (UX_SPEC §4.8, T-033 owns the Recharts visualisation).
- * W1 renders the real `GET /insights` data: focused time, completion, streak and best hours, plus
- * an accessible daily summary table. Empty ranges show A3's empty sentence and "—" metrics; the
- * chart itself is deferred to T-033 so there is no fake placeholder chart with invented bars.
- * `aria-busy` marks the region during a range switch (UX_SPEC §6.1).
+ * `/insights` (UX_SPEC §4.8, FR-013).
+ *
+ * Real `GET /insights?range=7d|30d|90d` data: focused time (`actualMinutes`), sessions, completion
+ * rate, current + longest streak, best focus hours, and a Recharts daily/weekly bar chart with both
+ * a plain-language summary and a disclosure table so the numbers never depend on the SVG. Empty
+ * ranges show "—" metrics and §6.1's encouraging sentence; the chart is hidden rather than faked.
+ * `aria-busy` marks the region during a range refresh.
  */
 
 import { useState } from 'react';
 import { ChartColumn } from 'lucide-react';
 import type { InsightsRange } from '@focus-mode/shared';
 
+import { FocusChart, buildChartSeries } from '../components/insights/focus-chart';
 import { Card, CardBody, CardHeader } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorState } from '../components/ui/error-state';
 import { Skeleton } from '../components/ui/loading';
 import { PageHeader } from '../components/ui/page-header';
 import { useInsights } from '../hooks/use-insights';
-import { formatDate, formatHour, formatMinutes, formatPercent } from '../lib/format';
+import { formatHour, formatMinutes, formatPercent } from '../lib/format';
 import { errorCodeOf } from '../lib/route-state';
 
 const RANGES: readonly { value: InsightsRange; label: string }[] = [
@@ -44,7 +47,17 @@ export function InsightsPage() {
   const insightsQuery = useInsights(range);
   const insights = insightsQuery.data;
   const isEmpty = insightsQuery.isSuccess && (insights?.totals.sessions ?? 0) === 0;
-  const bestHour = insights?.bestHours[0];
+
+  const series = insights === undefined ? null : buildChartSeries(insights.daily, insights.range);
+  const bestHours =
+    insights === undefined
+      ? []
+      : [...insights.bestHours]
+          .filter((entry) => entry.minutes > 0)
+          .sort((left, right) => right.minutes - left.minutes)
+          .slice(0, 3);
+  const bestHour = bestHours[0];
+  const bestHourPeak = bestHour?.minutes ?? 0;
 
   return (
     <>
@@ -86,7 +99,7 @@ export function InsightsPage() {
             {[0, 1, 2, 3].map((index) => (
               <Skeleton key={index} className="h-24 w-full" />
             ))}
-            <Skeleton className="h-56 w-full sm:col-span-2 lg:col-span-4" />
+            <Skeleton className="h-[300px] w-full sm:col-span-2 lg:col-span-4" />
           </div>
         ) : null}
 
@@ -99,14 +112,16 @@ export function InsightsPage() {
           />
         ) : null}
 
-        {insightsQuery.isSuccess && insights !== undefined ? (
+        {insightsQuery.isSuccess && insights !== undefined && series !== null ? (
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Metric
                 label="Focused time"
                 value={isEmpty ? '—' : formatMinutes(insights.totals.focusMinutes)}
                 hint={
-                  isEmpty ? 'No sessions in this range' : `${insights.totals.sessions} sessions`
+                  isEmpty
+                    ? 'No sessions in this range'
+                    : `${insights.totals.sessions} sessions · ${insights.totals.cancelled} cancelled`
                 }
               />
               <Metric
@@ -121,7 +136,11 @@ export function InsightsPage() {
               />
               <Metric
                 label="Best hours"
-                value={isEmpty || bestHour === undefined ? '—' : formatHour(bestHour.hour)}
+                value={
+                  isEmpty || bestHour === undefined
+                    ? '—'
+                    : `${formatHour(bestHour.hour)}–${formatHour(bestHour.hour + 1)}`
+                }
                 hint={
                   isEmpty || bestHour === undefined
                     ? undefined
@@ -137,51 +156,59 @@ export function InsightsPage() {
                 footnote="Metrics stay empty until a session finishes; nothing is estimated or back-filled."
               />
             ) : (
-              <Card ariaLabelledBy="daily-heading">
-                <CardHeader
-                  title="Daily focus minutes"
-                  titleId="daily-heading"
-                  description={`Last ${range.replace('d', '')} local days · timezone ${insights.timezone}`}
-                />
-                <CardBody>
-                  {insights.daily.length === 0 ? (
-                    <p className="text-[15px] text-muted">No daily data for this range yet.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[16rem] border-collapse text-left text-[13px]">
-                        <caption className="sr-only">
-                          Focused minutes per day for the selected range
-                        </caption>
-                        <thead>
-                          <tr className="bg-table-header text-ink">
-                            <th scope="col" className="px-3 py-2 font-medium">
-                              Day
-                            </th>
-                            <th scope="col" className="px-3 py-2 text-right font-medium">
-                              Focused minutes
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {insights.daily.map((point) => (
-                            <tr key={point.date} className="border-b border-border last:border-0">
-                              <th scope="row" className="px-3 py-2 font-normal text-ink">
-                                {formatDate(point.date)}
-                              </th>
-                              <td className="px-3 py-2 text-right font-mono tabular-nums text-ink">
-                                {Math.round(point.minutes)} m
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <p className="mt-3 text-[13px] text-muted">
-                    This table is the accessible view of your daily focus minutes.
-                  </p>
-                </CardBody>
-              </Card>
+              <>
+                <Card ariaLabelledBy="chart-heading">
+                  <CardHeader
+                    title={series.title}
+                    titleId="chart-heading"
+                    description={`Last ${range.replace('d', '')} local days · timezone ${insights.timezone}`}
+                  />
+                  <CardBody>
+                    <FocusChart series={series} timezone={insights.timezone} />
+                  </CardBody>
+                </Card>
+
+                <Card ariaLabelledBy="best-hours-heading">
+                  <CardHeader
+                    title="Best focus hours"
+                    titleId="best-hours-heading"
+                    description="When your focused minutes land in this range."
+                  />
+                  <CardBody>
+                    {bestHours.length === 0 ? (
+                      <p className="text-[15px] text-muted">
+                        No focus data for this range yet. Finish a session to see your best hours.
+                      </p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {bestHours.map((entry) => (
+                          <li key={entry.hour}>
+                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                              <p className="text-[15px] font-medium text-ink">
+                                {formatHour(entry.hour)}–{formatHour(entry.hour + 1)}
+                              </p>
+                              <p className="font-mono text-[13px] tabular-nums text-muted">
+                                {formatMinutes(entry.minutes)}
+                              </p>
+                            </div>
+                            <div
+                              aria-hidden="true"
+                              className="mt-1 h-2 w-full overflow-hidden rounded-[var(--radius-pill)] bg-skeleton"
+                            >
+                              <div
+                                className="h-full rounded-[var(--radius-pill)] bg-focus-strong"
+                                style={{
+                                  width: `${Math.round((entry.minutes / bestHourPeak) * 100)}%`,
+                                }}
+                              />
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </CardBody>
+                </Card>
+              </>
             )}
           </>
         ) : null}
