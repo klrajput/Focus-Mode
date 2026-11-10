@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // agent/build/flip-fuses.mjs — flip Electron fuses on a packaged Focus Agent (SEC-8, T-080).
 //
-// Usage (A10 / electron-builder `afterPack`):
-//   node agent/build/flip-fuses.mjs <appOutDir>
+// Two entrypoints, same fuse map (they must never drift):
+//   1. electron-builder `afterPack` (wired in agent/electron-builder.yml as
+//      `afterPack: build/flip-fuses.mjs`): electron-builder IMPORTS this module and calls the
+//      exported `afterPack(context)` / default export with `{ appOutDir, electronPlatformName }`.
+//      This is the packaging path used by `npx electron-builder`.
+//   2. Manual/CI CLI: `node agent/build/flip-fuses.mjs <appOutDir>`
 // where <appOutDir> is electron-builder's `context.appOutDir` (e.g. `agent/release/mac-arm64`,
 // `agent/release/win-unpacked`, `agent/release/linux-unpacked`). A `.app` bundle, the inner
 // executable, or a packaged executable path are also accepted so the script is usable by hand.
@@ -16,6 +20,7 @@
 //   * EnableEmbeddedAsarIntegrityValidation      ON  on macOS, where Electron supports it
 //   * EnableCookieEncryption                     ON  (the agent renderer has no cookies; any
 //                                                     accidental cookie store is encrypted)
+//   * GrantFileProtocolExtraPrivileges           OFF (file:// gets no extra privileges)
 //
 // MUST run after packaging but BEFORE code signing. On macOS the arm64 ad-hoc signature is reset
 // after the binary is modified; electron-builder then applies the real signature (or none for an

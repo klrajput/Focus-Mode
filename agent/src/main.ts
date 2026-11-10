@@ -20,6 +20,7 @@ import {
   Notification,
   powerMonitor,
   safeStorage,
+  session as electronSession,
   type IpcMainInvokeEvent,
   type MessageBoxOptions,
 } from 'electron';
@@ -472,6 +473,21 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  /**
+   * SEC-8: the agent window is a local, static HTML page and needs no web platform permission
+   * (camera, microphone, geolocation, notifications, clipboard, MIDI, fullscreen…). Electron's
+   * defaults can grant some of those to a renderer; deny every request and every check so a
+   * compromised renderer cannot use the window as a permission proxy.
+   */
+  function hardenDefaultSession(): void {
+    electronSession.defaultSession.setPermissionRequestHandler(
+      (_webContents, _permission, callback) => {
+        callback(false);
+      },
+    );
+    electronSession.defaultSession.setPermissionCheckHandler(() => false);
+  }
+
   function createMainWindow(): BrowserWindow {
     const window = new BrowserWindow({
       ...WINDOW_SIZE,
@@ -482,13 +498,24 @@ async function bootstrap(): Promise<void> {
         contextIsolation: true,
         sandbox: true,
         nodeIntegration: false,
+        nodeIntegrationInWorker: false,
         webSecurity: true,
+        allowRunningInsecureContent: false,
+        webviewTag: false,
         spellcheck: false,
         preload: path.join(DIST_DIR, 'ui', 'preload.cjs'),
       },
     });
 
     window.webContents.on('will-navigate', (event) => {
+      event.preventDefault();
+    });
+    // A local file page never legitimately redirects; deny it like any other navigation.
+    window.webContents.on('will-redirect', (event) => {
+      event.preventDefault();
+    });
+    // No webview may be attached to the agent window (webviewTag is off as well).
+    window.webContents.on('will-attach-webview', (event) => {
       event.preventDefault();
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -576,6 +603,8 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.whenReady();
+  // SEC-8: deny every renderer permission request before any window exists.
+  hardenDefaultSession();
   logger.info('Focus Agent starting', {
     version: app.getVersion(),
     os,

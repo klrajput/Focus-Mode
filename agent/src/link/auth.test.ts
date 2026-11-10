@@ -4,7 +4,7 @@
 // `getState` and `paired`; control messages are refused and the controller is never reached.
 
 import { generateKeyPairSync, sign as signBytes } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   authErrorMessageSchema,
   authOkMessageSchema,
@@ -15,6 +15,7 @@ import {
 } from '@focus-mode/shared';
 import { WebSocket } from 'ws';
 import { verifyAttestationJwt } from './attestation.js';
+import { buildState } from './messages.js';
 import { LINK_PATH, LinkServer, type LinkAddress, type LinkServerOptions } from './server.js';
 
 const ORIGIN = 'http://localhost:5173';
@@ -377,5 +378,189 @@ describe('control gating (REC-003, NFR-010)', () => {
     expect(refreshed.state).toBe('PAIRED');
     const challenge = challengeMessageSchema.parse(await client.next());
     expect(challenge.nonce).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+  });
+
+  it('issues a fresh challenge per handshake and refuses the old nonce after reconnect', async () => {
+    const { address } = await startLink();
+    const first = await connectAndChallenge(address.port);
+    const oldToken = signJwt({ nonce: first.nonce });
+    first.client.socket.close();
+    await first.client.closed;
+
+    // A reconnect is a brand-new handshake: new single-use nonce, never a reuse of the old one.
+    const second = await connectAndChallenge(address.port);
+    expect(second.nonce).not.toBe(first.nonce);
+
+    second.client.send({ v: 1, id: 'd-replay', type: 'auth', attestation: oldToken });
+    const error = authErrorMessageSchema.parse(await second.client.next());
+    expect(error.code).toBe('UNAUTHENTICATED');
+    expect(error.message).toMatch(/challenge/i);
+    await expect(second.client.closed).resolves.toMatchObject({ code: 1008 });
+  });
+
+  it('rejects duplicate concurrent auth attempts on the same challenge', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const verify = vi.fn(async () => {
+      await gate;
+      return {
+        ok: true as const,
+        deviceId: DEVICE_ID,
+        userId: USER_ID,
+        expiresAt: new Date(),
+      };
+    });
+    const { address } = await startLink({ verifyAttestation: verify });
+    const { client, nonce } = await connectAndChallenge(address.port);
+    const auth = { v: 1, id: 'd-dup', type: 'auth', attestation: signJwt({ nonce }) };
+
+    // Two auth frames before the first verification resolves: one challenge → one attempt.
+    client.send(auth);
+    client.send({ ...auth, id: 'd-dup-2' });
+    const error = authErrorMessageSchema.parse(await client.next());
+    expect(error.code).toBe('UNAUTHENTICATED');
+    expect(error.message).toMatch(/already being verified/i);
+    await expect(client.closed).resolves.toMatchObject({ code: 1008 });
+
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      client.frames.filter((frame) => (frame as { type: string }).type === 'authOk'),
+    ).toHaveLength(0);
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses control while an attestation is still being verified', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const verify = async (): Promise<Awaited<ReturnType<typeof verifyWithTrustedKey>>> => {
+      await gate;
+      return {
+        ok: true,
+        deviceId: DEVICE_ID,
+        userId: USER_ID,
+        expiresAt: new Date(),
+      };
+    };
+    const { address } = await startLink({ verifyAttestation: verify });
+    const { client, nonce } = await connectAndChallenge(address.port);
+
+    client.send({ v: 1, id: 'd-a', type: 'auth', attestation: signJwt({ nonce }) });
+    client.send({
+      v: 1,
+      id: 'd-control',
+      type: 'enterFocus',
+      durationMin: 25,
+      allowList: [],
+      consent: { acceptedAt: '2026-11-10T10:00:00.000Z', version: 'consent-v1' },
+      clientSessionId: CLIENT_SESSION_ID,
+    });
+
+    // No authOk was sent yet, so control is still unavailable; the socket is closed, never used.
+    const rejection = focusRejectedMessageSchema.parse(await client.next());
+    expect(rejection.code).toBe('UNAUTHENTICATED');
+    await expect(client.closed).resolves.toMatchObject({ code: 1008 });
+
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      client.frames.filter((frame) => (frame as { type: string }).type === 'authOk'),
+    ).toHaveLength(0);
+  });
+
+  it('drops a successful verification when the pairing changed while it ran', async () => {
+    let release: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let binding: { deviceId: string; userId: string } | null = {
+      deviceId: DEVICE_ID,
+      userId: USER_ID,
+    };
+    const { address, server } = await startLink({
+      getPairing: () => binding,
+      getSnapshot: () => ({ state: 'PAIRED', paired: true, protected: [], allowList: [] }),
+      verifyAttestation: async () => {
+        markStarted?.();
+        await gate;
+        return {
+          ok: true,
+          deviceId: DEVICE_ID,
+          userId: USER_ID,
+          expiresAt: new Date(),
+        };
+      },
+    });
+    const { client, nonce } = await connectAndChallenge(address.port);
+    client.send({ v: 1, id: 'd-a', type: 'auth', attestation: signJwt({ nonce }) });
+    await started;
+
+    // Re-pair to another device while the verifier is awaiting the key: refreshPairing skips the
+    // in-flight socket, but the post-verification binding re-check must still reject it.
+    binding = { deviceId: OTHER_ID, userId: USER_ID };
+    server.refreshPairing();
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+
+    release?.();
+    const error = authErrorMessageSchema.parse(await client.next());
+    expect(error.code).toBe('UNAUTHENTICATED');
+    expect(error.message).toMatch(/pairing changed/i);
+    await expect(client.closed).resolves.toEqual({ code: 1008, reason: 'PAIRING_CHANGED' });
+  });
+
+  it('drops a slow control reply when the dashboard socket closed meanwhile (T-080)', async () => {
+    let release: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const onMessageHandled = vi.fn();
+    const { address, server } = await startLink({
+      controlHandlers: {
+        enterFocus: async () => [],
+        exitFocus: async () => [],
+        listApps: async () => {
+          markStarted?.();
+          await gate;
+          return [];
+        },
+        getState: () => buildState({ state: 'PAIRED', protected: [], allowList: [] }),
+      },
+      onMessageHandled,
+    });
+    const { client, nonce } = await connectAndChallenge(address.port);
+    client.send({ v: 1, id: 'd-a', type: 'auth', attestation: signJwt({ nonce }) });
+    expect(authOkMessageSchema.parse(await client.next()).type).toBe('authOk');
+
+    client.send({ v: 1, id: 'd-list', type: 'listApps' });
+    await started;
+    client.socket.terminate();
+    await client.closed;
+    // Wait until the SERVER has observed the close, otherwise a reply could legitimately race it.
+    const deadline = Date.now() + 500;
+    while (server.connectedClients > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(server.connectedClients).toBe(0);
+
+    // The handler finishes after the socket is gone: its reply must be dropped, not written to a
+    // closed socket and not reported as handled.
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onMessageHandled).not.toHaveBeenCalledWith('listApps');
+    expect(
+      client.frames.filter((frame) => (frame as { type: string }).type === 'apps'),
+    ).toHaveLength(0);
   });
 });
