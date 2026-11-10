@@ -30,11 +30,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-latest]
-    env:
-      # server integration tests (W1+) download a mongod binary via mongodb-memory-server;
-      # MONGOMS_DOWNLOAD_DIR keeps it in a predictable path so a later actions/cache step
-      # (T-113/W7) can persist it. CI runners have unrestricted network — no sandbox.
-      MONGOMS_DOWNLOAD_DIR: ${{ runner.temp }}/mongodb-binaries
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +61,13 @@ jobs:
       # script yet is skipped, but the moment a workspace adds one its failures fail this
       # step — the exit code is npm's and is never masked.
       - name: Test
+        # server integration tests (W1+) download a mongod binary via mongodb-memory-server;
+        # MONGOMS_DOWNLOAD_DIR keeps it in a predictable path so a later actions/cache step
+        # (T-113/W7) can persist it. CI runners have unrestricted network — no sandbox.
+        # NOTE: the `runner` context is only available in step-level env (not job-level env),
+        # so this must stay on the step — GitHub rejects the whole workflow otherwise (A0 hotfix).
+        env:
+          MONGOMS_DOWNLOAD_DIR: ${{ runner.temp }}/mongodb-binaries
         run: npm test
 
       # Report-only for now (T-111): production dependency audit. Flip to blocking after
