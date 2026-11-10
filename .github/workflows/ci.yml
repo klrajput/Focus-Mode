@@ -1,0 +1,103 @@
+# Focus Mode — matrix CI (task T-111).
+# Installs from the committed package-lock.json, then runs lint → format check → typecheck →
+# build → test on Linux, Windows and macOS, and reports (without failing) the production
+# dependency audit. Every third-party action is pinned to a full 40-char commit SHA; the tag
+# it was resolved from is in the trailing comment (resolved 2026-11-10 with
+# `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Supersede in-flight PR runs on the same ref; never cancel a push-to-main run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege at workflow level; jobs only widen what they need.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        # --no-audit/--no-fund: the audit is a separate report-only step below.
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Root script is `npm run test --workspaces --if-present`: a workspace with no test
+      # script yet is skipped, but the moment a workspace adds one its failures fail this
+      # step — the exit code is npm's and is never masked.
+      - name: Test
+        # server integration tests (W1+) download a mongod binary via mongodb-memory-server;
+        # MONGOMS_DOWNLOAD_DIR keeps it in a predictable path so a later actions/cache step
+        # (T-113/W7) can persist it. CI runners have unrestricted network — no sandbox.
+        # NOTE: the `runner` context is only available in step-level env (not job-level env),
+        # so this must stay on the step — GitHub rejects the whole workflow otherwise (A0 hotfix).
+        env:
+          MONGOMS_DOWNLOAD_DIR: ${{ runner.temp }}/mongodb-binaries
+        run: npm test
+
+      # Report-only for now (T-111): production dependency audit. Flip to blocking after
+      # the W6 security wave triages findings (T-115). One OS is enough — same lockfile.
+      - name: Audit production dependencies (report-only)
+        if: runner.os == 'Linux'
+        run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true
+
+  secret-scan:
+    # PR-only: stop secrets before they reach main (T-111 requirement 5; extended in T-115).
+    name: secret scan (gitleaks)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # gitleaks-action lists the PR's commits through the API on pull_request events.
+      pull-requests: read
+    steps:
+      - name: Checkout (full history for diff scanning)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Personal-account repo: GITLEAKS_LICENSE is required only for organization accounts
+      # (gitleaks-action v3 README), so no repository secret has to be added. PR comments
+      # are disabled because this job deliberately keeps read-only permissions.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
