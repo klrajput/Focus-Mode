@@ -6,8 +6,8 @@
   "description": "Focus Agent — Electron companion app: pairing code, local WS link, visible focus state, OS window control.",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.renderer.json && node -e \"const fs=require('node:fs');fs.mkdirSync('dist/ui',{recursive:true});for(const f of ['index.html','styles.css'])fs.copyFileSync('src/ui/'+f,'dist/ui/'+f)\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "start": "electron .",

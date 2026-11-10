@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- SEC-8: no remote content, no inline script, no eval, no framing, no network. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <title>Focus Mode — Focus Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="agent" aria-labelledby="agent-title">
+      <header class="agent__header">
+        <p class="agent__brand">
+          <span class="agent__mark" aria-hidden="true">◆</span>
+          Focus Mode
+        </p>
+        <h1 id="agent-title" class="agent__title">Focus Agent</h1>
+        <p id="state-line" class="agent__state" role="status" aria-live="polite">
+          Starting Focus Agent…
+        </p>
+      </header>
+
+      <section id="pairing-section" class="card" aria-labelledby="pairing-title" hidden>
+        <h2 id="pairing-title" class="card__title">Pairing code</h2>
+        <p id="pairing-code" class="pairing-code" aria-label="Pairing code">— — — — — —</p>
+        <p class="muted">
+          Enter this code on the dashboard: Devices → Pair a device. It is shown only in this window
+          and is never sent to the dashboard or the cloud.
+        </p>
+      </section>
+
+      <section id="focus-section" class="card" aria-labelledby="focus-title" hidden>
+        <h2 id="focus-title" class="card__title">Focus session</h2>
+        <p id="focus-countdown" class="countdown" role="timer" aria-live="off">—</p>
+        <button id="end-focus" class="button button--primary" type="button">End focus</button>
+        <p class="muted">Ending a session restores every window this agent moved aside.</p>
+      </section>
+
+      <section class="card" aria-labelledby="allowlist-title">
+        <h2 id="allowlist-title" class="card__title">Allow-list (read-only)</h2>
+        <p class="muted">Protected apps can never be removed or moved aside.</p>
+        <ul id="protected-list" class="list" aria-label="Protected apps"></ul>
+        <p id="allowlist-empty" class="muted">No extra apps allowed yet.</p>
+        <ul id="allowlist" class="list" aria-label="Allowed apps"></ul>
+      </section>
+
+      <section
+        id="warning-section"
+        class="card card--warning"
+        aria-labelledby="warning-title"
+        hidden
+      >
+        <h2 id="warning-title" class="card__title">Window control unavailable</h2>
+        <p id="warning-text" class="muted"></p>
+      </section>
+
+      <footer class="agent__footer">
+        <p id="capabilities" class="muted">Window control: checking…</p>
+        <p class="muted">
+          Focus Mode never starts itself. Start at login is off by default and lives in the tray
+          menu.
+        </p>
+        <button id="quit" class="button button--quiet" type="button">Quit Focus Agent</button>
+        <p id="action-error" class="error" role="alert" hidden></p>
+      </footer>
+    </main>
+    <script src="./renderer.js" defer></script>
+  </body>
+</html>
