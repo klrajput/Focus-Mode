@@ -78,7 +78,7 @@ function buildAgentEnv(userDataDir: string, options: LaunchAgentOptions): Record
     AGENT_PORT: String(E2E_AGENT_PORT),
     AGENT_FOCUS_DRIVER: 'fake', // AGENTS §8: fake only for dev/test, never packaged.
     AGENT_HEADLESS: options.headless === true ? '1' : '0',
-    AGENT_LOG_LEVEL: 'warn',
+    AGENT_LOG_LEVEL: process.env.AGENT_E2E_LOG_LEVEL ?? 'warn',
     AGENT_ALLOWED_ORIGINS: CLIENT_ORIGIN,
     AGENT_API_BASE_URL: API_BASE_URL,
     AGENT_USER_DATA_DIR: userDataDir,

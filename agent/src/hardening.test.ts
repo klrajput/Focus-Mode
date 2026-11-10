@@ -123,6 +123,18 @@ describe('No shell strings and no window-title access (INV-6, SEC rules)', () =>
   });
 });
 
+describe('main-process wiring tripwires', () => {
+  it('fills the late-bound link handle so lifecycle frames reach dashboards', () => {
+    // Regression guard for the W3 E2E bug: main.ts built the link server but never assigned
+    // `link.server`, so focusStarted/focusEnded broadcasts were silent no-ops while the journal
+    // and the controller claimed FOCUSING. Static check — the wiring is main-process-only.
+    const source = read('main.ts');
+    expect(source).toContain('link.server = linkServer');
+    expect(source).toContain('link.server?.broadcast(buildFocusStarted(');
+    expect(source).toContain('link.server?.broadcast(buildFocusEnded(');
+  });
+});
+
 describe('driver selection (AGENTS §8)', () => {
   it('refuses the FakeDriver in a packaged build', () => {
     expect(() =>
