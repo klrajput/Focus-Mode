@@ -1,0 +1,61 @@
+/*
+ * PROVISIONAL implementation of UX_SPEC §1.3 — owned long-term by A3 (T-007 / `client/src/styles/**`).
+ * A4 created this file in W1 (T-020) so the shell can consume the layout, motion, ring and z-index
+ * tokens without inventing local values. Colour tokens are emitted by the `@theme` block in
+ * `src/index.css` (UX_SPEC §1.4); this file only defines the non-colour custom properties and the
+ * reduced-motion collapse required by NFR-008 / UX_SPEC §9. Do not add hex values here: A3 owns colour.
+ */
+
+:root {
+  /* motion — calm only, no bounce/spring (UX_SPEC §9) */
+  --fm-duration-fast: 120ms;
+  --fm-duration-base: 180ms;
+  --fm-duration-slow: 240ms;
+  --fm-ease-calm: cubic-bezier(0.2, 0, 0, 1);
+
+  /* focus ring (NFR-008) */
+  --fm-ring-width: 2px;
+  --fm-ring-offset: 2px;
+
+  /* layout */
+  --fm-sidebar-w: 248px;
+  --fm-content-max: 1200px;
+  --fm-page-pad-x: 16px;
+  --fm-focus-indicator-h: 44px;
+
+  /* countdown ring — SVG reads these once the Focus Agent link lands (T-045) */
+  --fm-ring-size-lg: 320px;
+  --fm-ring-size-md: 280px;
+  --fm-ring-size-sm: 220px;
+  --fm-ring-stroke-lg: 12px;
+  --fm-ring-stroke-sm: 10px;
+  --fm-ring-track-color: var(--color-ring-track);
+  --fm-ring-progress-color: var(--color-focus-on-base);
+
+  /* z-index scale — never invent local values */
+  --fm-z-sticky: 10;
+  --fm-z-nav: 20;
+  --fm-z-drawer: 30;
+  --fm-z-modal: 40;
+  --fm-z-toast: 50;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --fm-page-pad-x: 24px;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --fm-page-pad-x: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fm-duration-fast: 0.01ms;
+    --fm-duration-base: 0.01ms;
+    --fm-duration-slow: 0.01ms;
+  }
+}
