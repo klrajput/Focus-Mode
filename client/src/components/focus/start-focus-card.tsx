@@ -84,6 +84,13 @@ export function StartFocusCard() {
 
   const unsupported = agent.capabilities?.focus === 'unsupported';
 
+  // F-101 (A3 review, MED safety): starting focus while the allow-list is unknown would send
+  // `userApps: []` and tell the user "none yet" when the truth is "unknown". Block until it is
+  // known — protected apps are always safe, but the user's own apps are not guessable.
+  const allowlistPending = allowlistQuery.isPending;
+  const allowlistFailed = allowlistQuery.isError;
+  const allowlistUnknown = allowlistPending || allowlistFailed;
+
   const blockedReason: string | null = unsupported
     ? FOCUS_REJECTED_MESSAGES.UNSUPPORTED
     : agent.status === 'FOCUSING'
@@ -96,7 +103,11 @@ export function StartFocusCard() {
             ? FOCUS_REJECTED_MESSAGES.NOT_PAIRED
             : durationMin === null
               ? INVALID_DURATION_COPY
-              : null;
+              : allowlistPending
+                ? 'Loading your allow-list…'
+                : allowlistFailed
+                  ? "Couldn't load your allow-list. Retry before starting focus."
+                  : null;
 
   const attentionNeeded = unsupported || agent.status === 'DISCONNECTED' || agent.status === 'IDLE';
 
@@ -107,6 +118,11 @@ export function StartFocusCard() {
 
   function confirmStart(): void {
     if (durationMin === null) return;
+    if (allowlistUnknown) {
+      // Defensive: the consent modal cannot open in this state, but never start blind.
+      setSendError('Your allow-list is not available yet. Retry before starting focus.');
+      return;
+    }
     const sent = agent.startFocus({
       durationMin,
       allowList,
@@ -141,10 +157,14 @@ export function StartFocusCard() {
         <p className="mt-4 text-[13px] text-muted">
           Allow-listed:{' '}
           <span className="text-ink">
-            {allowListLabels.length === 0
-              ? 'none yet — protected apps only'
-              : allowListLabels.slice(0, 4).join(' · ') +
-                (allowListLabels.length > 4 ? ` · and ${allowListLabels.length - 4} more` : '')}
+            {allowlistPending
+              ? 'loading…'
+              : allowlistFailed
+                ? 'unknown — retry before starting'
+                : allowListLabels.length === 0
+                  ? 'none yet — protected apps only'
+                  : allowListLabels.slice(0, 4).join(' · ') +
+                    (allowListLabels.length > 4 ? ` · and ${allowListLabels.length - 4} more` : '')}
           </span>
         </p>
 

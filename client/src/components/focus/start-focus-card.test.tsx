@@ -66,12 +66,23 @@ function fakeResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function installFetch(): void {
+type AllowlistFetchMode = 'ok' | 'pending' | 'error';
+
+function installFetch(allowlistMode: AllowlistFetchMode = 'ok'): void {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/allowlist')) {
+        if (allowlistMode === 'pending') return new Promise<Response>(() => undefined);
+        if (allowlistMode === 'error') {
+          return Promise.resolve(
+            fakeResponse(
+              { success: false, error: { code: 'INTERNAL', message: 'allow-list unavailable' } },
+              500,
+            ),
+          );
+        }
         return Promise.resolve(fakeResponse({ success: true, data: ALLOWLIST }));
       }
       if (url.includes('/devices')) {
@@ -336,5 +347,27 @@ describe('StartFocusCard', () => {
       screen.getAllByText('Enter a duration between 1 and 480 minutes.').length,
     ).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Start Focus' })).toBeDisabled();
+  });
+
+  it('blocks Start while the allow-list is still loading (F-101 safety)', async () => {
+    installFetch('pending');
+    renderCard({ status: 'PAIRED', capabilities: { focus: 'full' } });
+
+    // The reason is visible and the button is disabled: starting now would send `userApps: []`
+    // and tell the user "none yet" when the truth is "unknown".
+    expect(await screen.findByText(/Loading your allow-list/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Focus' })).toBeDisabled();
+    expect(screen.getByText(/loading…/)).toBeInTheDocument();
+  });
+
+  it('blocks Start when the allow-list request failed (F-101 safety)', async () => {
+    installFetch('error');
+    renderCard({ status: 'PAIRED', capabilities: { focus: 'full' } });
+
+    expect(
+      await screen.findByText(/Couldn't load your allow-list. Retry before starting focus./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Focus' })).toBeDisabled();
+    expect(screen.getByText(/unknown — retry before starting/)).toBeInTheDocument();
   });
 });
