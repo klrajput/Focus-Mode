@@ -71,9 +71,10 @@ async function main(): Promise<void> {
   process.env.MONGO_URI = memory.getUri();
   process.stdout.write(`[e2e-api] mongodb-memory-server ready (${memory.getUri()})\n`);
 
-  const { startServer } = await import('../../server/src/server.js');
-  const running = await startServer();
-
+  // Seed BEFORE the HTTP listener starts: Playwright's `webServer` only waits for `/health`, so if
+  // the listener came up first the very first spec could run before the demo accounts exist
+  // (observed as a flaky 401 on the first login). `seedDatabase` owns and closes its own mongoose
+  // connection when none is open, so this also keeps the seed path identical to `npm run seed`.
   const { seedDatabase } = await import('../../server/src/seed/seed.js');
   const counts = await seedDatabase({
     log: (message) => process.stdout.write(`[e2e-api] ${message}\n`),
@@ -82,6 +83,10 @@ async function main(): Promise<void> {
     `[e2e-api] seeded demo data — users=2 sessions=${counts.sessions} ` +
       `schedules=${counts.schedules} presets=${counts.presets} agentLinks=${counts.agentLinks}\n`,
   );
+
+  // Now start the API: once `/health` answers, the seeded fixtures are guaranteed to exist.
+  const { startServer } = await import('../../server/src/server.js');
+  const running = await startServer();
   process.stdout.write(`[e2e-api] ready on ${API_ORIGIN} (POST/GET ${API_ORIGIN}/health)\n`);
 
   let stopping = false;
