@@ -109,16 +109,18 @@ test.describe('Scheduled focus session (real scheduler)', () => {
   }) => {
     test.slow();
     test.setTimeout(DUE_WAIT_TIMEOUT_MS);
+    // FR-012: capture the dashboard ↔ agent local channel. This MUST be registered before the
+    // dashboard opens its WebSocket (during sign-in below) — `page.on('websocket')` only reports
+    // sockets created after registration.
+    const localFrames: string[] = [];
+    captureLocalFrames(page, localFrames);
+
     const { agent, accessToken } = await pairAgentViaUi(page, request);
     try {
       // The agent's native consent dialog is answered inside the agent process (KI-011); the
       // scheduled >=10 s heads-up is a native notification + tray/window affordance that auto-starts
       // when its window elapses, so no dialog needs stubbing for the accept path.
       await stubNativeAgentDialogs(agent);
-
-      // FR-012: the heads-up must reach the dashboard over the frozen local channel before the start.
-      const localFrames: string[] = [];
-      captureLocalFrames(page, localFrames);
 
       const due = dueIn(LEAD_MINUTES);
       let schedule: ApiSchedule;
@@ -209,8 +211,12 @@ test.describe('Scheduled focus session (real scheduler)', () => {
 test.describe('Missed scheduled run (agent offline)', () => {
   test.fixme(
     !MISSED_RUN_READY,
-    'A5 W4 scheduler + MISSED run reaper + GET /notifications API are not in this checkout yet, ' +
-      'so the offline-at-due-time path cannot be observed through the frozen REST contract.',
+    'The real scheduler + MISSED-run reaper ARE present and were verified in the scheduled-session ' +
+      'test (server/src/cron/scheduler.ts dispatches scheduleDue at the due minute). The offline ' +
+      'MISSED path itself cannot be asserted through the frozen REST contract yet because ' +
+      'GET /notifications (§3.1 #22) is not merged — the run/notification rows are only in Mongo, ' +
+      'which the E2E harness must not touch directly (the API is the only writer). A5 scheduler ' +
+      'unit tests cover MISSED; this spec runs for real once the notifications API lands.',
   );
 
   test('a schedule due while no agent is connected is recorded MISSED with a notification, no focus', async ({

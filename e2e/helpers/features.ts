@@ -71,13 +71,14 @@ function readSourceTree(relativeDir: string): string {
   return chunks.join('\n');
 }
 
-/** A5 T-063: a per-minute scheduler tick exists and is started by the server bootstrap. */
+/** A5 T-063: the per-minute scheduler + stale-run sweep exist and are started by the server. */
 export function schedulerShipped(): boolean {
   const server = readIfExists('server/src/server.ts');
-  const scheduleService = readIfExists('server/src/services/schedule.service.ts');
+  const cronIndex = readIfExists('server/src/cron/index.ts');
   return (
-    (server.includes('scheduler') || server.includes('Scheduler')) &&
-    /MISSED|scheduleDue/.test(scheduleService)
+    existsSync(path.join(REPO_ROOT, 'server/src/cron/scheduler.ts')) &&
+    cronIndex.includes('startScheduler') &&
+    server.includes('startCronJobs')
   );
 }
 
