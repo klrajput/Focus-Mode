@@ -6,7 +6,7 @@
 
 Distractions are foreground windows: games, chat, unrelated browsers. A website cannot reach them, so a dashboard alone cannot create a focus state. Focus Mode splits the problem across three cooperating parts — a React dashboard, an Express + MongoDB API, and an Electron Focus Agent that is the **only** component allowed to touch the operating system. The dashboard and API carry the product (accounts, devices, sessions, schedules, analytics); the Focus Agent carries the trust boundary (pairing, local-link authentication, window handling, journal-backed restore). Every action is explicit, consented, visible and reversible.
 
-**Build status:** W0–W2 gates have passed (monorepo + frozen contracts, auth/seed, real pairing + live link); the **W3 focus core is in progress**. The feature table below states exactly what is verified today, what is being built, and what is planned — nothing more. Task-level evidence lives in [`docs/AGENT_STATUS.md`](docs/AGENT_STATUS.md).
+**Build status:** W0–W4 gates have passed and **W5 is in progress** (insights, settings, admin, landing, notifications). Everything through the focus core, schedules, and the dashboard's device / allow-list / session flows is merged and tested; the feature table below states exactly what is verified, what is partially verified (naming what remains a human check), and what is planned — nothing more. Task-level evidence lives in [`docs/AGENT_STATUS.md`](docs/AGENT_STATUS.md) and per-platform detail in [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 
 ---
 
@@ -40,7 +40,7 @@ flowchart LR
   subgraph Cloud["Cloud"]
     API["Express API /api/v1"]
     DB[("MongoDB")]
-    CRON["node-cron scheduler<br/>(planned, W4)"]
+    CRON["node-cron scheduler<br/>(W4)"]
   end
   UI -- "HTTPS REST<br/>Bearer JWT" --> API
   API <--> DB
@@ -63,33 +63,36 @@ flowchart LR
 
 ## 2. Feature status by PDF ID
 
-Status legend (as of the W3 wave — see `docs/AGENT_STATUS.md` for the evidence behind each claim):
+Status legend (as of the W4 gate; W5 is in progress — evidence in `docs/AGENT_STATUS.md` and `docs/PLATFORMS.md`):
 
-- ✅ **Implemented and verified** — merged to `main`, covered by passing automated tests and/or a real end-to-end run; the evidence was recorded at a wave gate.
-- 🔄 **In progress** — being built in the current wave; code may be unmerged or partial, so it is **not** claimed as working.
+- ✅ **Implemented and verified** — merged to `main`, covered by passing automated tests and/or a real end-to-end or manual evidence run recorded at a wave gate.
+- 🟡 **Partially verified** — implemented and tested, but a named part of the acceptance criteria is still NEEDS-HUMAN (each row says which part).
+- 🔄 **In progress** — being built in the current wave (W5); not claimed as working.
 - 📋 **Planned** — scheduled for a later wave; not implemented yet.
 
-At the W2 gate the repository had **507 automated tests green** (shared 167 · server 124 · client 42 · agent 174) and a **9-test Playwright suite passing against the real stack** (real Electron Focus Agent, real 6-digit code, real `POST /devices/pair`, real Ed25519 attestation).
+At the W4 gate (2026-11-11) the repository had **1015 unit/integration tests green** (shared 175 · server 220 · client 125 · agent 495) and a **Playwright E2E suite of 16 passing tests + 1 self-gated skip** (the missed-run E2E re-arms automatically once the W5 notifications API lands). The E2E suite drives the real dashboard, the real API with a seeded in-memory MongoDB, and the real Electron Focus Agent; `scripts/verify/macos-focus-smoke.ts` additionally proves real window hide/restore on macOS (DEC-020).
 
 | PDF ID | Feature | Pri | Status | Evidence / next step |
 |---|---|---|---|---|
-| AUTH-1 | Signup, login, logout, JWT, protected routes, seeded admin | P0 | ✅ Implemented and verified | W1 gate: auth API integration tests (401/403/429, bcrypt cost, no password hash in responses), CI green on Ubuntu, Windows and macOS; the W2 E2E harness logs in against the real API |
+| AUTH-1 | Signup, login, logout, JWT, protected routes, seeded admin | P0 | ✅ Implemented and verified | W1 gate: server auth integration tests (401/403/429, bcrypt cost 12, no password hash in responses); the real E2E logs in through the API; CI green on Ubuntu, Windows and macOS |
 | FR-030 | Idempotent demo seed (admin, demo user, ≥30 days of history, schedules, presets, agent links) | P0 | ✅ Implemented and verified | W1 gate: seed idempotency tests; the same seed powers the E2E API |
-| PAIR-1 | 6-digit code pairing; connected/disconnected status | P0 | ✅ Implemented and verified | W2 gate: real E2E — real Electron agent shows a real code, `POST /devices/pair` binds the device, badge becomes Connected via a real Ed25519 attestation. Known issue KI-010: the badge may need one page reload after pairing until the W3 fix lands |
-| LINK-1 | Loopback WebSocket with live status both ways | P0 | ✅ Implemented and verified | W2 gate: link integration tests + real E2E over `ws://127.0.0.1`; foreign Origin/Host are rejected |
-| AGENT-1 | Runnable Electron Focus Agent with tray/menu-bar presence and Quit | P0 | 🔄 In progress | The agent launches, registers, pairs and heartbeats (verified with real Electron in W2 E2E); tray/window polish is W3, and visual tray behaviour is NEEDS-HUMAN |
-| FOCUS-1 | Start focus → other foreground apps step aside, browsers stay | P0 | 🔄 In progress | W3: `FocusController` + FakeDriver, consent, enforcement loop, plus the real Win32/macOS/Linux drivers — not yet claimable |
-| FOCUS-2 | End focus → full restore from dashboard or agent tray | P0 | 🔄 In progress | W3: journal-backed idempotent restore in the controller |
-| FOCUS-3 | Timed 25/50/60/custom sessions, live countdown, auto-end | P0 | 🔄 In progress | W3: countdown derived from the agent's absolute `endsAt` |
-| SAFE-1 | Protected allow-list never removable; user-added apps | P0 | 🔄 In progress | W1: protected set + matcher verified by property tests; W3: allow-list API + editor page |
-| SAFE-2 | Explicit pre-session confirmation; always-visible focus indicator | P0 | 🔄 In progress | W3: consent modal, global focus indicator, native first-run dialog in the agent |
-| SESS-1 | Session history (start/end, planned and actual minutes, completed vs cancelled) | P0 | 🔄 In progress | W3: sessions API with idempotent reporting; dashboard history follows in W4 |
-| X-PLAT-1 | Windows and macOS behind one agent interface | P1 | 🔄 In progress | W3: Win32 (koffi), macOS (JXA) and Linux X11 drivers. macOS is the primary P0 OS here; Windows/Linux real-desktop verification is NEEDS-HUMAN |
-| SCHED-1 | Recurring schedules auto-start when the agent is running | P1 | 🔄 In progress | W3: schedules CRUD; scheduler tick + missed-run notifications in W4 |
-| RECONN-1 | Graceful disconnect, reconnect and sleep handling | P1 | 🔄 In progress | W2 shipped link reconnect/backoff and agent heartbeat; full sleep/crash reconcile and cloud-offline polish in W6 |
-| ANALYTICS-1 | Totals, daily/weekly chart, streaks, completion rate | P1 | 📋 Planned | W5 |
-| FR-019 | Admin: users, presets, agent links, aggregate stats | P0 | 📋 Planned | W5; the `/admin` route already renders behind the ADMIN role guard |
-| FR-021 | All dashboard pages, profile/password, notifications, badge, focus indicator | P0 | 🔄 In progress | W1: all 13 routes render with role guards (USER → `/admin` shows 403); W2: `/devices` feature-complete; remaining data pages fill in W3–W5 |
+| PAIR-1 | 6-digit code pairing; connected/disconnected status | P0 | ✅ Implemented and verified | W2 gate: real E2E — real Electron agent → real 6-digit code → `POST /devices/pair` → Connected badge via a real Ed25519 attestation. KI-010 (badge refresh) was fixed and re-verified at the W4 gate: pair/unpair now update the badge with no reload |
+| LINK-1 | Loopback WebSocket with live status both ways | P0 | ✅ Implemented and verified | W2/W4: link integration tests + real E2E over `ws://127.0.0.1`; foreign Origin/Host rejected; attested handshake and live state transitions covered |
+| AGENT-1 | Runnable Electron Focus Agent with tray/menu-bar presence and Quit | P0 | 🟡 Partially verified | Real Electron agent launches, pairs, shows its window and reports state in the E2E; `AGENT_SMOKE` launcher passes in CI on all OSes. Native tray/notification visuals are NEEDS-HUMAN (KI-013, T-101) |
+| FOCUS-1 | Start focus → other foreground apps step aside, browsers stay | P0 | ✅ Implemented and verified | W3: FakeDriver focus E2E (Start → consent → countdown → End → restore) plus **real macOS** verification — `scripts/verify/macos-focus-smoke.ts` hides and restores TextEdit through the real Darwin driver (`PASS darwin/arm64`). Windows/Linux runtime is NEEDS-HUMAN (see X-PLAT-1) |
+| FOCUS-2 | End focus → full restore from dashboard or agent tray | P0 | ✅ Implemented and verified | W3: journal-first idempotent restore covered by controller tests + focus E2E; the real macOS restore is verified by the same script |
+| FOCUS-3 | Timed 25/50/60/custom sessions, live countdown, auto-end | P0 | ✅ Implemented and verified | W3: countdown derived from the agent's absolute `endsAt` in the E2E; timer/auto-end/sleep accounting covered by agent unit tests |
+| SAFE-1 | Protected allow-list never removable; user-added apps | P0 | ✅ Implemented and verified | W3/W4: protected-set matcher property tests + allow-list API tests rejecting protected changes (`PROTECTED_ENTRY` on 4 attack shapes) + E2E; the UI shows locked protected rows |
+| SAFE-2 | Explicit pre-session confirmation; always-visible focus indicator | P0 | ✅ Implemented and verified | W3: the consent modal cannot send `enterFocus` before Confirm (tested), and the global indicator is on every authenticated route; the native first-run consent gate is E2E-covered through a test seam (KI-011), its visuals are unit-tested only |
+| SESS-1 | Session history (start/end, planned and actual minutes, completed vs cancelled) | P0 | ✅ Implemented and verified | W3/W4: sessions API tests (idempotency, 409, filters) + E2E `api-sessions` / `session-reporting` including dashboard-closed reporting; dashboard history cards are live |
+| X-PLAT-1 | Windows and macOS behind one agent interface | P1 | 🟡 Partially verified | macOS real verified (DEC-020). Windows (koffi) and Linux X11 (`wmctrl`/`xdotool`) are implemented behind the frozen `FocusDriver`, covered by mocked-native contract tests and CI builds; real window control on those OSes is NEEDS-HUMAN (KI-005, T-100/T-102) |
+| SCHED-1 | Recurring schedules auto-start when the agent is running | P1 | ✅ Implemented and verified | W4: real-scheduler E2E — create schedule → minute tick → `scheduleDue` → ≥10 s cancellable heads-up → source SCHEDULE session → run recorded and persisted; the offline MISSED path is covered by server tests (missed-run E2E self-gated until the W5 notifications API) |
+| RECONN-1 | Graceful disconnect, reconnect and sleep handling | P1 | 🟡 Partially verified | W2 shipped link reconnect/backoff + heartbeat; W3 covered sleep/resume reconcile and crash recovery in the controller. Full cross-layer hardening (T-080) is W6 |
+| ANALYTICS-1 | Totals, daily/weekly chart, streaks, completion rate | P1 | 🔄 In progress | W5: insights API + `/insights` page are landing in this wave |
+| FR-019 | Admin: users, presets, agent links, aggregate stats | P0 | 🔄 In progress | W5: admin APIs + `/admin` page are landing; the route already enforces the ADMIN role guard |
+| FR-021 | All dashboard pages, profile/password, notifications, badge, focus indicator | P0 | 🟡 Partially verified | All 13 routes render with role guards; dashboard, devices, allow-list, schedules and focus are real. `/insights`, `/settings`, `/admin`, the landing page and the notifications bell land in W5 |
+| FR-025 | Missed scheduled runs recorded and notified | P1 | 🟡 Partially verified | Missed runs are recorded and notified server-side (scheduler/reaper tests); the notifications REST/UI surface and the missed-run E2E land in W5 |
+| FR-029 | Profile, change password, notifications, unpair all, download agent | P0 | 🔄 In progress | W5: `/settings` + `/users/me` APIs are landing |
 | BLOCK-1 | Optional browser block-list during focus | P2 | 📋 Planned | W10 bonus (requires an optional MV3 browser extension) |
 | POMO-1 | Pomodoro cycles + ambient sounds | P2 | 📋 Planned | W10 bonus |
 | MULTI-1 | Multiple paired devices, choose which to focus | P2 | 📋 Planned | W10 bonus |
@@ -117,7 +120,7 @@ focus-mode/
 ├── client/    React dashboard: all routes, role guards, AgentLink provider, live agent status
 ├── agent/     Electron Focus Agent: tray/window UI, loopback link, cloud client, journal, per-OS FocusDriver
 ├── e2e/       Playwright E2E: real dashboard + real API (in-memory MongoDB, seeded) + real Electron agent
-├── docs/      Decisions, contracts, traceability, UX spec, known issues, release guide
+├── docs/      Decisions, contracts, traceability, platform matrix, UX spec, known issues, release guide
 └── .github/   CI matrix + release workflow (all third-party actions SHA-pinned)
 ```
 
@@ -140,7 +143,7 @@ focus-mode/
 git clone https://github.com/klrajput/Focus-Mode.git
 cd Focus-Mode
 npm install
-npm run build -w @focus-mode/shared   # required once: the other packages import its compiled output
+npm run build -w @focus-mode/shared   # one-time (also run automatically by `npm run dev`): other packages import its compiled output
 ```
 
 ### 2. Copy the environment examples
@@ -180,7 +183,7 @@ The server boots in development with the shipped placeholder values, but **they 
 ### 4. Seed the demo data
 
 ```sh
-npm run seed --workspace @focus-mode/server
+npm run seed        # root alias for `npm run seed --workspace @focus-mode/server`
 ```
 
 The seed is idempotent (safe to run twice) and refuses `NODE_ENV=production` without `--force`. It prints the demo logins listed in [Test credentials](#6-test-credentials).
@@ -206,7 +209,7 @@ Open `http://localhost:5173` and log in with the demo account. The Focus Agent o
 ```sh
 npm run lint
 npm run typecheck
-npm test          # unit + API integration tests (server suite downloads a MongoDB binary on first run)
+npm test          # 1015 unit/integration tests at the W4 gate; the server suite downloads a MongoDB binary on first run
 npm run build
 ```
 
@@ -219,9 +222,23 @@ npx playwright install chromium
 npx playwright test
 ```
 
+On a machine where the user cache is not writable (sandboxed dev machines, KI-007) keep the browser and its cache inside the workspace:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH=$PWD/.playwright-browsers npx playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=$PWD/.playwright-browsers npx playwright test
+```
+
+Two extra verification tools:
+
+```sh
+node scripts/smoke/launch.mjs                  # headless AGENT_SMOKE boot of the built agent (same check the release workflow runs)
+npx tsx scripts/verify/macos-focus-smoke.ts    # macOS only: real hide/restore of TextEdit through the real Darwin driver (FOCUS-1/FOCUS-2)
+```
+
 ## 6. Test credentials
 
-Seeded by `npm run seed --workspace @focus-mode/server` for the exam walkthrough (demo values only — never reuse them on a real deployment):
+Seeded by `npm run seed` for the exam walkthrough (demo values only — never reuse them on a real deployment):
 
 | Role | Email | Password |
 |---|---|---|
@@ -235,17 +252,17 @@ The seed also includes ≥30 days of realistic session history, schedules, allow
 1. **Start the stack** with `npm run dev` (or run the agent separately with `npm run dev --workspace @focus-mode/agent`).
 2. **Run the Focus Agent** — its window shows a state and, while unpaired, a **6-digit pairing code**. The code exists only in the agent window; it is never sent to the dashboard (a web page that can reach `127.0.0.1` must not be able to read it).
 3. **Log in** at `http://localhost:5173/login` as `kabir@demo.com` / `Kabir@123`.
-4. **Pair the agent** — open `/devices`, choose *Pair a device*, type the 6-digit code, confirm. The dashboard calls `POST /api/v1/devices/pair`; the agent polls for its device token (delivered once, never through the browser), switches to `PAIRED`, and the dashboard badge shows **Connected** through the attested local link. If the badge does not refresh, reload the page once (known issue KI-010, being fixed in W3).
+4. **Pair the agent** — open `/devices`, choose *Pair a device*, type the 6-digit code, confirm. The dashboard calls `POST /api/v1/devices/pair`; the agent polls for its device token (delivered once, never through the browser), switches to `PAIRED`, and the dashboard badge shows **Connected** through the attested local link, with no page reload needed (KI-010 fixed and verified at the W4 gate).
 5. **Review the allow-list** — `/allowlist` keeps browsers, the Focus Agent itself and OS-critical processes permanently locked; your own apps can be added.
 6. **Start a session** — on `/dashboard` pick 25 / 50 / 60 minutes or a custom duration, read the consent dialog (what stays open, what steps aside, how to end), and confirm. The dashboard sends `enterFocus` over the local link; the Focus Agent writes its journal first and then moves other foreground apps aside.
 7. **Watch the session** — `/focus` shows a countdown derived from the agent's absolute `endsAt`; a global focus indicator stays visible on every authenticated page, and the agent's tray always offers *End focus*.
 8. **End and restore** — finish from the dashboard, from the agent tray, on timer expiry, or by quitting the agent. Windows the agent changed are restored; windows you had already minimised stay minimised; the session is finalised once and appears in history.
 
-> Steps 1–4 (auth, pairing, live link, `/devices`) are implemented and verified today. Steps 5–8 are the intended flow of the W3 focus core, which is **in progress** — until it lands the dashboard does not fake a session; the Start control reports the missing agent capability.
+> All eight steps are implemented on the merged product. Real window movement is verified on **macOS arm64** (`scripts/verify/macos-focus-smoke.ts`) and against the FakeDriver in the E2E suite; Windows and Linux X11 runtime behaviour is NEEDS-HUMAN, and native tray/notification visuals remain a manual check (KI-013). Platform details: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 
 ## 8. Installing the Focus Agent
 
-Prebuilt installers are produced by [`.github/workflows/release.yml`](.github/workflows/release.yml) on a `v*` tag (or via `workflow_dispatch` dry-run builds): Windows NSIS `.exe` + portable, macOS `.dmg`/`.zip` (arm64 and x64), Linux AppImage and `.deb`. **Download links will be added to the GitHub Releases page after the first tagged release** — there are no public download links yet, and this README does not invent any. Meanwhile you can run the agent from source with `npm run dev --workspace @focus-mode/agent`, or build an unsigned package locally (`npm run build -w @focus-mode/agent`, then `npx electron-builder --publish never` inside `agent/`).
+Prebuilt installers are produced by [`.github/workflows/release.yml`](.github/workflows/release.yml) on the project's native GitHub runners: Windows NSIS `.exe` + portable, macOS `.dmg`/`.zip` (arm64 and x64), Linux AppImage and `.deb`. **Real unsigned installers have already been built by CI**: workflow-dispatch run `42858934575` (2026-11-11) produced all four targets with **4/4 per-OS `AGENT_SMOKE` smoke jobs green**, and the tag-only guard held (the release job skipped, **zero GitHub Releases created**). There is therefore **no public download link yet** — releases are created only when a maintainer pushes a `v*` tag — and this README does not invent one. Until then you can run the agent from source with `npm run dev --workspace @focus-mode/agent`, or build an unsigned package locally (`npm run build -w @focus-mode/agent`, then `npx electron-builder --publish never` inside `agent/`). Artifacts produced for this run: `focus-mode-agent-0.1.0-win-setup.exe`, `…-win-portable.exe`, `…-mac-arm64.dmg`/`.zip`, `…-mac-x64.dmg`/`.zip`, `…-linux-x64.AppImage`, `…-linux-x64.deb` — see [`docs/PLATFORMS.md`](docs/PLATFORMS.md) §6 and [`docs/RELEASING.md`](docs/RELEASING.md) §2.
 
 Builds are **unsigned** unless the project supplies signing certificates (`docs/RELEASING.md` §6 covers this in full). That is documented, not hidden:
 
@@ -288,12 +305,13 @@ The safety model below is the product contract; the parts still under constructi
 | Safari + HTTPS dashboard | Safari cannot open `ws://127.0.0.1` from an HTTPS page. Use Chrome, Edge or Firefox for the deployed dashboard; Firefox/Chrome may show a one-time local-network permission prompt (allow it — the dashboard includes a help card). Dev over `http://localhost` works in Safari too |
 | Linux Wayland | No generic window control; the agent reports `capabilities.focus = "unsupported"` and the dashboard refuses to start focus with an explanation. X11 works and needs `wmctrl`/`xdotool` at runtime |
 | Elevated windows (Windows) | A non-elevated agent cannot move elevated (admin) windows (UIPI); they are skipped and reported through capabilities instead of failing silently |
-| Unsigned installers | SmartScreen / Gatekeeper warnings on first launch; the documented steps above avoid them until signing certificates are available |
+| Unsigned installers | CI produces real unsigned artifacts (4/4 smoke jobs green), but the installers themselves are unsigned, and installer-level launch on each OS is still NEEDS-HUMAN. SmartScreen / Gatekeeper steps are in §8 and [`docs/RELEASING.md`](docs/RELEASING.md) §6 |
 | Free-tier hosting | Free API tiers may sleep while idle, which can skip a scheduler minute. Use an always-on tier for demos; the agent heartbeat keeps the API warm during sessions |
-| Badge refresh after pairing (KI-010) | The live badge can require one page reload after pairing/unpairing; the fix is scheduled in W3. Tracked in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) |
-| Real-OS verification | macOS arm64 is the primary verified OS (real Electron agent + real pairing E2E on this machine). Real window-hide/restore on a physical desktop is covered by the Phase-8 manual checklist (W8, pending); Windows and Linux X11 are **NEEDS-HUMAN** — no such desktops were available (KI-005). Compiling does not count as verifying |
+| Native tray / OS notifications (KI-013) | Playwright `_electron` cannot click native menus or read native notifications. The W4 E2E ends a dashboard-closed session from the agent window's End Focus button (the same controller path the tray uses) and asserts the machine-readable `scheduleHeadsUp` frame; the literal tray click and notification banners stay on the Phase-8 manual checklist (T-101/T-102) |
+| Native consent dialog (KI-011) | The first-run agent consent dialog is driven through a test-only in-process seam in E2E — by design a web page must never be able to answer it. Its visuals are unit-tested, not E2E-covered |
+| Real-OS verification | macOS arm64 is verified locally for the real-driver focus core (`scripts/verify/macos-focus-smoke.ts` → `PASS darwin/arm64`) plus the real E2E suite. Windows and Linux X11 runtime behaviour is **NEEDS-HUMAN** — no such desktops were available (KI-005); the exact checklist is in [`docs/PLATFORMS.md`](docs/PLATFORMS.md) §7. Compiling does not count as verifying |
 | macOS permissions | The shipped hide/unhide path works without Accessibility permission (spike S-2). If the JXA fallback path is ever needed, the agent asks for Automation permission and degrades to "cannot enforce focus" if denied |
-| E2E needs a display | The pairing E2E drives the real agent window (a display is required; headless Linux runs it under `xvfb-run`). Real window management is not exercised in CI |
+| E2E needs a display | The pairing E2E drives the real agent window (a display is required; headless Linux runs it under `xvfb-run`), and on sandboxed machines the Playwright browser cache must live inside the workspace (KI-007, see §5). Real window management is not exercised in CI |
 
 ## 11. Documentation
 
@@ -302,14 +320,15 @@ The safety model below is the product contract; the parts still under constructi
 | [`docs/AGENT_STATUS.md`](docs/AGENT_STATUS.md) | System of record: worker status, commands + evidence, wave gates |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Architecture decision records (pairing digest, attestation algorithm, dependency policy, …) |
 | [`docs/INTEGRATION_CONTRACTS.md`](docs/INTEGRATION_CONTRACTS.md) | Frozen REST + local WebSocket + cloud WebSocket contracts with examples |
-| [`docs/REQUIREMENT_TRACEABILITY.md`](docs/REQUIREMENT_TRACEABILITY.md) | PDF-ID → requirement → task → verification traceability, validated by script |
+| [`docs/REQUIREMENT_TRACEABILITY.md`](docs/REQUIREMENT_TRACEABILITY.md) | PDF-ID → requirement → task → verification traceability, validated by script, with the W1–W5 implementation status per requirement |
+| [`docs/PLATFORMS.md`](docs/PLATFORMS.md) | Per-OS behaviour + limitations, browser support matrix, installer/artifact matrix, Phase-8 manual checklist status |
 | [`docs/UX_SPEC.md`](docs/UX_SPEC.md) | Design tokens, wireframes, consent copy, states, accessibility |
 | [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | Open defects and accepted limitations |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | Release process, unsigned-build install steps, signing/notarisation |
 | [`docs/SPIKES.md`](docs/SPIKES.md) | Platform spike results (macOS hide/unhide, default browser, Windows, browser↔loopback) |
 | [`SPEC.md`](SPEC.md) · [`PROMPTS.md`](PROMPTS.md) | Where the specification lives · key prompts used to build the project |
 
-Planned documents (not yet in the repository — do not link them yet): `docs/SECURITY_REVIEW.md` (W6), `docs/PLATFORMS.md` (W7–W8), `docs/QA_REPORT.md` (W9), `docs/VIVA_NOTES.md` (W9), `docs/DEMO_SCRIPT.md` (W9).
+Planned documents (not yet in the repository — do not link them yet): `docs/SECURITY_REVIEW.md` (W6), `docs/QA_REPORT.md` (W9), `docs/VIVA_NOTES.md` (W9), `docs/DEMO_SCRIPT.md` (W9).
 
 ---
 
