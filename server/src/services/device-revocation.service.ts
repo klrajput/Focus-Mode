@@ -6,6 +6,7 @@
 // Invariants: the device token/enroll secret can never be used again (row removed); an offline agent
 // is not an error (the push is best-effort — the agent also drops state when its next request 401s);
 // deleting is idempotent from the client's perspective (second DELETE → 404 NOT_FOUND).
+// `revokeAllDevicesForUser` (FR-029/T-072) applies exactly the same order to every owned device.
 
 import { Types } from 'mongoose';
 import { ERROR_CODES } from '@focus-mode/shared';
@@ -41,4 +42,29 @@ export async function revokeOwnedDevice(userId: string, deviceId: string): Promi
 
   await Device.deleteOne({ _id: deviceObjectId, ownerId: ownerObjectId });
   return { id: deviceId, revoked: true };
+}
+
+/** Success payload of `POST /devices/unpair-all` (W5 additive endpoint, FR-029). */
+export interface UnpairAllResult {
+  unpaired: number;
+}
+
+/**
+ * FR-029 "unpair all": revoke every device of the user. For each device the `revoked` frame is
+ * pushed first (so a connected Focus Agent restores focus and returns to IDLE — INV-5), then the
+ * row (and therefore its token hash) is deleted. Offline devices are still revoked in the DB.
+ */
+export async function revokeAllDevicesForUser(userId: string): Promise<UnpairAllResult> {
+  const ownerObjectId = new Types.ObjectId(userId);
+  const devices = await Device.find({ ownerId: ownerObjectId }).select('_id').lean();
+
+  let unpaired = 0;
+  for (const device of devices) {
+    const deviceId = String(device._id);
+    const delivered = await pushRevokeToAgent(deviceId);
+    await Device.deleteOne({ _id: device._id, ownerId: ownerObjectId });
+    unpaired += 1;
+    logger.info({ deviceId, delivered }, 'device revoked by unpair-all');
+  }
+  return { unpaired };
 }

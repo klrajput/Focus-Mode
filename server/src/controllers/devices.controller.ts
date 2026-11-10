@@ -1,4 +1,4 @@
-// server/src/controllers/devices.controller.ts — dashboard device handlers (T-040, T-043).
+// server/src/controllers/devices.controller.ts — dashboard device handlers (T-040/T-043/T-072).
 // Why: the browser pairs with a 6-digit code, lists/revokes its own devices and asks the cloud for
 // a short-lived attestation bound to a local-channel challenge nonce. Controllers stay thin:
 // validation happened in middleware, ownership/business rules live in the services.
@@ -20,7 +20,12 @@ import { getValidatedQuery } from '../middlewares/validate.js';
 import { signDeviceAttestation, type DeviceAttestation } from '../services/attestation.service.js';
 import { getOwnedDevice, listDevices, type PublicDevice } from '../services/device.service.js';
 import { pairDevice, type PairDeviceResult } from '../services/pairing.service.js';
-import { revokeOwnedDevice, type RevokedDevice } from '../services/device-revocation.service.js';
+import {
+  revokeAllDevicesForUser,
+  revokeOwnedDevice,
+  type RevokedDevice,
+  type UnpairAllResult,
+} from '../services/device-revocation.service.js';
 import { AppError } from '../utils/AppError.js';
 
 type RouteParams = Record<string, string>;
@@ -66,6 +71,16 @@ export const attest: RequestHandler<
   }
 
   const data = signDeviceAttestation({ userId: user.id, deviceId, nonce: req.body.nonce });
+  res.status(200).json({ success: true, data });
+};
+
+/** POST /api/v1/devices/unpair-all — 200 `{unpaired}`; revokes every device (FR-029, delta C-23). */
+export const unpairAll: RequestHandler<RouteParams, ApiSuccess<UnpairAllResult>> = async (
+  req,
+  res,
+) => {
+  const user = getAuthenticatedUser(req);
+  const data = await revokeAllDevicesForUser(user.id);
   res.status(200).json({ success: true, data });
 };
 

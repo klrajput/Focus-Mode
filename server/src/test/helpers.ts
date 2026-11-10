@@ -181,6 +181,10 @@ export async function markDeviceConnected(deviceId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** A real bcrypt cost-12 hash of a throwaway test password (fixtures never log in with it). */
+/** Plaintext of `TEST_PASSWORD_HASH` — a throwaway fixture password, never production. */
+export const TEST_PASSWORD = 'focus-mode-dummy-password';
+
+/** A real bcrypt cost-12 hash of TEST_PASSWORD (fixtures log in with it when needed). */
 export const TEST_PASSWORD_HASH = '$2b$12$d/MOKOhWHuKkrgXN4VZzvuUzfzmjJeA5889BJtg3YrY3V2MQq1s7.';
 
 /** Create a user document directly (unique email unless overridden), for cron/reaper fixtures. */
