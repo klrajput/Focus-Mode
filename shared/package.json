@@ -16,11 +16,16 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "dev": "tsc --watch -p tsconfig.json"
+    "dev": "tsc --watch -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "vitest": "5.1.0"
   }
 }
