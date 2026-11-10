@@ -1,14 +1,15 @@
 /*
- * AgentStatusBadge — persistent status slot in the AppShell header (UX_SPEC §3, FR-021).
- * Status is always icon + text (never colour-only, NFR-008) and the copy always says "Focus Agent",
- * never bare "agent". In W1 there is no local link yet, so the badge honestly shows "not connected"
- * with a visible note that the live link lands in W2 — no fake "Connected" state is possible.
+ * AgentStatusBadge — persistent status slot in the AppShell header (UX_SPEC §3, FR-021/FR-004).
+ * The badge reads the real `AgentLinkProvider` state: icon + text always (never colour-only,
+ * NFR-008), `aria-live="polite"` so a reconnect is announced once, and a tooltip that explains the
+ * current state. While the first attempt is still running it says "Connecting…" (no fake
+ * "Connected"); a Disconnected badge is a button that reveals the LNA help card (UX_SPEC §6.3).
  */
 
 import type { AgentConnectionStatus } from '@focus-mode/shared';
-import { CheckCircle2, CircleSlash2, Target, type LucideIcon } from 'lucide-react';
+import { CheckCircle2, CircleSlash2, Loader2, Target, type LucideIcon } from 'lucide-react';
 
-import { useAgentConnection } from '../../agent/agent-connection';
+import { useAgentLink } from '../../agent/agent-link-provider';
 import { StatusBadge, type BadgeTone } from '../ui/status-badge';
 
 interface StatusView {
@@ -24,26 +25,37 @@ const STATUS_VIEWS: Readonly<Record<AgentConnectionStatus, StatusView>> = {
   FOCUSING: { tone: 'focus', icon: Target, label: 'Focusing' },
 };
 
+const CONNECTING_VIEW: StatusView = { tone: 'neutral', icon: Loader2, label: 'Connecting…' };
+
 export function AgentStatusBadge() {
-  const agent = useAgentConnection();
-  const view = STATUS_VIEWS[agent.status];
+  const agent = useAgentLink();
+  const view =
+    agent.connecting && agent.status === 'DISCONNECTED'
+      ? CONNECTING_VIEW
+      : STATUS_VIEWS[agent.status];
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <div
-        role="status"
-        aria-live="polite"
-        aria-label={`Focus Agent status: ${view.label}`}
-        className="min-w-0"
-      >
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={`Focus Agent status: ${view.label}`}
+      className="flex min-w-0 items-center gap-2"
+    >
+      {agent.status === 'DISCONNECTED' && !agent.connecting ? (
+        <button
+          type="button"
+          onClick={agent.showHelpCard}
+          aria-label={`Focus Agent status: ${view.label}. Show connection help`}
+          className="rounded-[var(--radius-pill)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none"
+        >
+          <StatusBadge tone={view.tone} icon={view.icon} title={agent.detail}>
+            {view.label}
+          </StatusBadge>
+        </button>
+      ) : (
         <StatusBadge tone={view.tone} icon={view.icon} title={agent.detail}>
           {view.label}
         </StatusBadge>
-      </div>
-      {agent.isLive ? null : (
-        <span className="hidden max-w-[16rem] truncate text-[13px] text-muted md:inline">
-          Focus Agent · live link lands in W2
-        </span>
       )}
     </div>
   );

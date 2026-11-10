@@ -1,17 +1,19 @@
 /*
  * Route-guard tests (T-020 acceptance: unauth → /login; USER on /admin → 403 page).
  * The guards are rendered with a directly provided AuthContext so the tests exercise the redirect
- * decision itself, not the network bootstrap. The 403 page and AppShell are the real components.
+ * decision itself, not the network bootstrap. The 403 page and AppShell are the real components;
+ * the shell reads an honestly disconnected AgentLink context (no socket in this test).
  */
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
+import { AgentLinkContext } from '../agent/agent-link-provider';
 import { AppShell } from '../components/layout/app-shell';
 import { ForbiddenPage } from '../pages/forbidden';
 import { LoginPage } from '../pages/login';
-import { makeAuthValue, makeUserWithRole } from '../test/test-utils';
+import { makeAgentLinkValue, makeAuthValue, makeUserWithRole } from '../test/test-utils';
 import { AuthContext } from './auth-context';
 import { RequireAuth } from './require-auth';
 import { RequireRole } from './require-role';
@@ -36,18 +38,20 @@ function renderAdminRoute(role: 'USER' | 'ADMIN') {
 
   return render(
     <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
-      <MemoryRouter initialEntries={['/admin']}>
-        <Routes>
-          <Route element={<RequireAuth />}>
-            <Route element={<AppShell />}>
-              <Route element={<RequireRole role="ADMIN" />}>
-                <Route path="/admin" element={<div>admin area</div>} />
+      <AgentLinkContext.Provider value={makeAgentLinkValue()}>
+        <MemoryRouter initialEntries={['/admin']}>
+          <Routes>
+            <Route element={<RequireAuth />}>
+              <Route element={<AppShell />}>
+                <Route element={<RequireRole role="ADMIN" />}>
+                  <Route path="/admin" element={<div>admin area</div>} />
+                </Route>
+                <Route path="/403" element={<ForbiddenPage />} />
               </Route>
-              <Route path="/403" element={<ForbiddenPage />} />
             </Route>
-          </Route>
-        </Routes>
-      </MemoryRouter>
+          </Routes>
+        </MemoryRouter>
+      </AgentLinkContext.Provider>
     </AuthContext.Provider>,
   );
 }

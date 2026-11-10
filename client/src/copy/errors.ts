@@ -4,7 +4,7 @@
  * so a page never invents an error message and support can still see the real code as muted text.
  */
 
-import { ERROR_CODES, type ErrorCode } from '@focus-mode/shared';
+import { ERROR_CODES, type ErrorCode, type FocusRejectedCode } from '@focus-mode/shared';
 
 import { isApiError } from '../api/errors';
 
@@ -45,3 +45,19 @@ export function copyForError(error: unknown): string {
 export function copyForCode(code: ErrorCode): string {
   return ERROR_MESSAGES[code];
 }
+
+/**
+ * Local-channel `focusRejected` copy (UX_SPEC §6.2, contracts §4.6).
+ * These are the approved dashboard sentences; the agent's own `message` stays a support detail and
+ * is never shown as the primary message.
+ */
+export const FOCUS_REJECTED_MESSAGES: Readonly<Record<FocusRejectedCode, string>> = Object.freeze({
+  ALREADY_FOCUSING: ERROR_MESSAGES.ALREADY_FOCUSING,
+  UNAUTHENTICATED: 'Your Focus Agent needs to be verified again. Pair it on Devices.',
+  NOT_PAIRED: "Your Focus Agent isn't paired to this account yet. Pair it on Devices.",
+  CONSENT_REQUIRED: 'Confirm the first-run permission in the Focus Agent window, then try again.',
+  UNSUPPORTED:
+    "Your Focus Agent can't move windows on this system. Focus needs Windows, macOS, or Linux with X11.",
+  INVALID:
+    'The Focus Agent rejected that request. Try again — if it keeps happening, restart the Focus Agent.',
+});

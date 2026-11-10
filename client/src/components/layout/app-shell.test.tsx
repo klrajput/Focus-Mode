@@ -1,15 +1,16 @@
 /*
  * AppShell role-aware navigation test (T-020): USER sees the seven product pages and no Admin
- * entry; ADMIN additionally sees Admin. Also asserts the honest Focus Agent status slot, which must
- * never claim a connection that does not exist in W1.
+ * entry; ADMIN additionally sees Admin. The shell renders against an honest disconnected AgentLink
+ * value, so it never claims a connection the local channel does not have.
  */
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
+import { AgentLinkContext } from '../../agent/agent-link-provider';
 import { AuthContext } from '../../auth/auth-context';
-import { makeAuthValue, makeUserWithRole } from '../../test/test-utils';
+import { makeAgentLinkValue, makeAuthValue, makeUserWithRole } from '../../test/test-utils';
 import { AppShell } from './app-shell';
 
 const PRIMARY_LABELS = [
@@ -27,13 +28,15 @@ function renderShell(role: 'USER' | 'ADMIN') {
 
   return render(
     <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
-      <MemoryRouter initialEntries={['/dashboard']}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route path="/dashboard" element={<h1>Dashboard content</h1>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <AgentLinkContext.Provider value={makeAgentLinkValue()}>
+        <MemoryRouter initialEntries={['/dashboard']}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="/dashboard" element={<h1>Dashboard content</h1>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </AgentLinkContext.Provider>
     </AuthContext.Provider>,
   );
 }
