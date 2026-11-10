@@ -1,10 +1,11 @@
-// Shared test helpers: a retry-free QueryClient and a typed AuthContext value.
-// Guards and components are rendered against the context directly, so tests never fake auth through
-// the network layer and never mutate module state.
+// Shared test helpers: a retry-free QueryClient, a typed AuthContext value and a disconnected
+// AgentLink context value. Guards and components are rendered against the contexts directly, so
+// tests never fake auth through the network layer and never mutate module state.
 
 import { QueryClient } from '@tanstack/react-query';
 import type { Role } from '@focus-mode/shared';
 
+import type { AgentLinkContextValue } from '../agent/agent-link-provider';
 import type { PublicUser } from '../api/types';
 import type { AuthContextValue } from '../auth/auth-context';
 
@@ -46,6 +47,29 @@ export function makeAuthValue(overrides: Partial<AuthContextValue> = {}): AuthCo
     register: async () => user ?? makeUser(),
     logout: async () => undefined,
     retry: () => undefined,
+    ...overrides,
+  };
+}
+
+/** Honest disconnected AgentLink value for components rendered outside the provider. */
+export function makeAgentLinkValue(
+  overrides: Partial<AgentLinkContextValue> = {},
+): AgentLinkContextValue {
+  return {
+    status: 'DISCONNECTED',
+    capabilities: null,
+    session: null,
+    agentVersion: null,
+    detail: 'Not connected to a Focus Agent yet.',
+    connecting: false,
+    helpCardVisible: false,
+    headsUp: null,
+    connect: () => undefined,
+    refresh: () => undefined,
+    showHelpCard: () => undefined,
+    dismissHelpCard: () => undefined,
+    notifyPaired: () => undefined,
+    endFocus: () => undefined,
     ...overrides,
   };
 }
