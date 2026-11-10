@@ -290,6 +290,12 @@ async function bootstrap(): Promise<void> {
     logger,
   });
 
+  // Fill the late-bound handle BEFORE the link starts serving: the controller's lifecycle events
+  // (focusStarted/focusEnded) are broadcast through it, so without this assignment every
+  // dashboard would silently miss the focus transition (T-050/T-051 integration bug found by the
+  // W3 E2E gate: the journal showed FOCUSING while no dashboard ever received `focusStarted`).
+  link.server = linkServer;
+
   /**
    * REC-004 state for the agent window/tray (UX_SPEC §5.1). Derived from the same stored record
    * the gate uses, so the window can never show "granted" while the gate would still prompt.
