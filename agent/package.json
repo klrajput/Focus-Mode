@@ -12,9 +12,11 @@
     "dev": "npm run build && electron ."
   },
   "dependencies": {
+    "dotenv": "18.0.10",
     "electron-log": "5.4.4",
     "koffi": "3.3.7",
-    "ws": "8.22.2"
+    "ws": "8.22.2",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
