@@ -25,7 +25,12 @@ import { Device, type DeviceDocument } from '../models/Device.js';
 import { ScheduleRun } from '../models/ScheduleRun.js';
 import { Session } from '../models/Session.js';
 import { createSession } from '../services/session.service.js';
-import { clearTestDatabase, startTestDatabase, stopTestDatabase } from '../test/helpers.js';
+import {
+  clearTestDatabase,
+  createDirectUser,
+  startTestDatabase,
+  stopTestDatabase,
+} from '../test/helpers.js';
 import {
   AGENT_LINK_CONTRACT_PATH,
   AGENT_LINK_PATH,
@@ -171,7 +176,9 @@ async function createDevice(
   overrides: { token?: string; status?: DeviceStatus; ownerId?: Types.ObjectId } = {},
 ): Promise<CreatedDevice> {
   const token = overrides.token ?? `device-token-${randomUUID()}`;
-  const ownerId = overrides.ownerId ?? new Types.ObjectId();
+  // W6 follow-up F-03b: a device always belongs to a REAL user account now (the session-report
+  // path re-checks `user.isActive`, so an orphan random ObjectId would correctly be refused).
+  const ownerId = overrides.ownerId ?? (await createDirectUser())._id;
   const device = await Device.create({
     ownerId,
     name: 'Test Mac',

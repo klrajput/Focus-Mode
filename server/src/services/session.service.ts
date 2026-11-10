@@ -23,6 +23,7 @@ import {
 } from '@focus-mode/shared';
 import { Device } from '../models/Device.js';
 import { Session, type SessionDocument } from '../models/Session.js';
+import { User } from '../models/User.js';
 import { AppError } from '../utils/AppError.js';
 import { duplicateKeyFields, isDuplicateKeyError } from '../utils/mongo-errors.js';
 import { buildPaginated, pageSkip } from '../utils/pagination.js';
@@ -351,6 +352,16 @@ export async function reportSessionStarted(
   userId: string,
   input: ReportedSessionStart,
 ): Promise<CreateSessionResult> {
+  // W6 follow-up F-03b (A9): a deactivated account must not persist new focus sessions from an
+  // agent that is still connected (deactivation is authoritative for cloud data, not just login).
+  const owner = await User.findById(toObjectId(userId)).select('isActive').lean();
+  if (owner === null) {
+    throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found.');
+  }
+  if (owner.isActive !== true) {
+    throw new AppError(ERROR_CODES.ACCOUNT_DISABLED, 'This account has been disabled.');
+  }
+
   return createSession(userId, {
     deviceId: input.deviceId,
     durationMin: input.plannedMinutes,

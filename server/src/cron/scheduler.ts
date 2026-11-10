@@ -179,13 +179,21 @@ export async function runSchedulerTick(deps: SchedulerDeps = {}): Promise<Schedu
     (id) => new Types.ObjectId(id),
   );
   const users = await User.find({ _id: { $in: userIds } })
-    .select('_id timezone')
+    .select('_id timezone isActive')
     .lean();
-  const timeZones = new Map(users.map((user) => [String(user._id), user.timezone]));
+  const usersById = new Map(
+    users.map((user) => [String(user._id), { timeZone: user.timezone, isActive: user.isActive }]),
+  );
 
   for (const scheduleRow of dueSchedules) {
     try {
-      const timeZone = timeZones.get(String(scheduleRow.userId)) ?? FALLBACK_TIME_ZONE;
+      const owner = usersById.get(String(scheduleRow.userId));
+      // W6 follow-up F-03c (A9): a deactivated account must not get scheduled focus announced.
+      // Skipping here (before `lastRunAt` is claimed) also means no MISSED row/notification spam;
+      // reactivation simply resumes at the next matching local minute. A deleted owner row is
+      // skipped the same way. This is never a "missed" run — nothing was promised to the user.
+      if (owner === undefined || owner.isActive !== true) continue;
+      const timeZone = owner.timeZone ?? FALLBACK_TIME_ZONE;
       if (!isScheduleDue(scheduleRow, timeZone, now)) continue;
       if (alreadyRunThisLocalMinute(scheduleRow.lastRunAt, timeZone, now)) continue;
       if (!(await claimScheduleMinute(scheduleRow, now))) continue;

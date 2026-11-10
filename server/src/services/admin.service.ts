@@ -29,6 +29,7 @@ import {
   type Role,
 } from '@focus-mode/shared';
 import { AgentLink } from '../models/AgentLink.js';
+import { revokeAllDevicesForUser } from './device-revocation.service.js';
 import { Device } from '../models/Device.js';
 import { OS_NAMES } from '../models/enums.js';
 import { Preset } from '../models/Preset.js';
@@ -185,6 +186,14 @@ export async function updateAdminUser(
   if (updated === null) {
     throw new AppError(ERROR_CODES.NOT_FOUND, USER_NOT_FOUND_MESSAGE);
   }
+
+  if (input.isActive === false) {
+    // W6 follow-up F-03d (A9): deactivation must invalidate live device credentials immediately
+    // (device tokens would otherwise keep working until the agent re-authenticates). The helper
+    // is best-effort per device, so one failed hub push cannot fail the admin action.
+    await revokeAllDevicesForUser(String(updated._id));
+  }
+
   return toSafeUser(updated);
 }
 

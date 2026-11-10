@@ -4,11 +4,13 @@
 // constant time, so a database leak cannot be replayed as a credential.
 // Invariants: only `Authorization: Bearer <token>` is accepted (no query/cookie fallbacks); a
 // revoked/unknown token answers 401 UNAUTHENTICATED; a device without an owner (should not exist
-// once a token was issued) is also rejected; the middleware attaches `req.device` = {id, ownerId}.
+// once a token was issued) is also rejected; a token whose owner is deactivated answers
+// 403 ACCOUNT_DISABLED (F-03a); the middleware attaches `req.device` = {id, ownerId}.
 
 import type { Request, RequestHandler } from 'express';
 import { ERROR_CODES } from '@focus-mode/shared';
 import { Device } from '../models/Device.js';
+import { User } from '../models/User.js';
 import { AppError } from '../utils/AppError.js';
 import { safeEqualHex } from '../utils/crypto.js';
 import { hashDeviceToken } from '../utils/device-token.js';
@@ -55,6 +57,13 @@ export const requireDeviceToken: RequestHandler = async (req, _res, next) => {
     device.ownerId === null
   ) {
     throw new AppError(ERROR_CODES.UNAUTHENTICATED, UNAUTHENTICATED_MESSAGE);
+  }
+
+  // W6 follow-up F-03a: a deactivated account must lose its device credentials immediately —
+  // the dashboard already gets 403 ACCOUNT_DISABLED; the Focus Agent must not keep cloud access.
+  const owner = await User.findById(device.ownerId).select('isActive').lean();
+  if (owner === null || owner.isActive !== true) {
+    throw new AppError(ERROR_CODES.ACCOUNT_DISABLED, 'This account has been disabled.');
   }
 
   req.device = { id: String(device._id), ownerId: String(device.ownerId) };
