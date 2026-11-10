@@ -1,0 +1,39 @@
+# Focus Mode — CodeQL code scanning (optional part of T-111; expanded in T-115).
+# Runs on every PR to main, on every push to main, and weekly on a schedule.
+# Third-party actions are pinned to full commit SHAs with the source tag in a comment
+# (resolved 2026-11-10 with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1' # Mondays 03:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (javascript-typescript)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # Required to upload CodeQL results to the repository's code scanning dashboard.
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
