@@ -228,6 +228,16 @@ const CLOUD_FIXTURES: readonly { type: string; message: Record<string, unknown> 
       allowListVersion: 3,
     },
   },
+  {
+    type: 'scheduleRunCancelled',
+    message: {
+      v: PROTOCOL_VERSION,
+      id: 'c-06',
+      type: 'scheduleRunCancelled',
+      runId: RUN_ID,
+      at: AT,
+    },
+  },
   { type: 'revoked', message: { v: PROTOCOL_VERSION, id: 'c-05', type: 'revoked' } },
 ];
 
@@ -482,9 +492,9 @@ describe('local channel messages', () => {
 });
 
 describe('cloud channel messages', () => {
-  it('covers all 5 documented message types exactly once', () => {
-    expect(CLOUD_MESSAGE_TYPES).toHaveLength(5);
-    expect(new Set(CLOUD_MESSAGE_TYPES).size).toBe(5);
+  it('covers all 6 documented message types exactly once', () => {
+    expect(CLOUD_MESSAGE_TYPES).toHaveLength(6);
+    expect(new Set(CLOUD_MESSAGE_TYPES).size).toBe(6);
     expect(new Set(CLOUD_FIXTURES.map((fixture) => fixture.type))).toEqual(
       new Set(CLOUD_MESSAGE_TYPES),
     );
@@ -521,6 +531,78 @@ describe('cloud channel messages', () => {
     expect(CLOUD_MESSAGE_DIRECTIONS.heartbeat).toBe('AGENT_TO_CLOUD');
     expect(CLOUD_MESSAGE_DIRECTIONS['session.started']).toBe('AGENT_TO_CLOUD');
     expect(CLOUD_MESSAGE_DIRECTIONS['session.ended']).toBe('AGENT_TO_CLOUD');
+    expect(CLOUD_MESSAGE_DIRECTIONS.scheduleRunCancelled).toBe('AGENT_TO_CLOUD');
+    const agentToCloud = CLOUD_MESSAGE_TYPES.filter(
+      (type) => CLOUD_MESSAGE_DIRECTIONS[type] === 'AGENT_TO_CLOUD',
+    );
+    expect(agentToCloud).toHaveLength(4);
+    expect(cloudToAgent).toHaveLength(2);
+  });
+
+  describe('DEC-021 schedule-run lifecycle', () => {
+    const startedFixture =
+      CLOUD_FIXTURES.find((fixture) => fixture.type === 'session.started')?.message ?? {};
+    const cancelledFixture =
+      CLOUD_FIXTURES.find((fixture) => fixture.type === 'scheduleRunCancelled')?.message ?? {};
+
+    it('accepts session.started without scheduleRunId (MANUAL / older agents)', () => {
+      expect(cloudMessageSchema.safeParse(startedFixture).success).toBe(true);
+    });
+
+    it('accepts scheduleRunId on a SCHEDULE session.started', () => {
+      const scheduled = { ...startedFixture, source: 'SCHEDULE', scheduleRunId: RUN_ID };
+      const result = cloudMessageSchema.safeParse(scheduled);
+      expect(result.success).toBe(true);
+      if (!result.success || result.data.type !== 'session.started') return;
+      expect(result.data.scheduleRunId).toBe(RUN_ID);
+      expect(result.data.source).toBe('SCHEDULE');
+    });
+
+    it('rejects a malformed scheduleRunId but keeps the field optional', () => {
+      expect(
+        cloudMessageSchema.safeParse({ ...startedFixture, scheduleRunId: 'not-an-object-id' })
+          .success,
+      ).toBe(false);
+      expect(
+        cloudMessageSchema.safeParse({ ...startedFixture, scheduleRunId: undefined }).success,
+      ).toBe(true);
+    });
+
+    it('accepts a well-formed scheduleRunCancelled (agent → cloud)', () => {
+      const result = cloudMessageSchema.safeParse(cancelledFixture);
+      expect(result.success).toBe(true);
+      if (!result.success || result.data.type !== 'scheduleRunCancelled') return;
+      expect(result.data.runId).toBe(RUN_ID);
+      expect(result.data.at).toBe(AT);
+      expect(CLOUD_MESSAGE_DIRECTIONS.scheduleRunCancelled).toBe('AGENT_TO_CLOUD');
+    });
+
+    it('rejects malformed scheduleRunCancelled payloads and unknown fields', () => {
+      expect(cloudMessageSchema.safeParse({ ...cancelledFixture, runId: 'nope' }).success).toBe(
+        false,
+      );
+      expect(cloudMessageSchema.safeParse({ ...cancelledFixture, at: 'not-a-date' }).success).toBe(
+        false,
+      );
+      expect(cloudMessageSchema.safeParse({ ...cancelledFixture, reason: 'USER' }).success).toBe(
+        false,
+      );
+      expect(
+        cloudMessageSchema.safeParse({
+          v: PROTOCOL_VERSION,
+          id: 'c-x',
+          type: 'scheduleRunCancelled',
+        }).success,
+      ).toBe(false);
+    });
+
+    it('cannot be sent by the cloud to the agent (INV-2 unchanged)', () => {
+      const cloudToAgent = CLOUD_MESSAGE_TYPES.filter(
+        (type) => CLOUD_MESSAGE_DIRECTIONS[type] === 'CLOUD_TO_AGENT',
+      );
+      expect(cloudToAgent).not.toContain('scheduleRunCancelled');
+      expect([...cloudToAgent].sort()).toEqual(['revoked', 'scheduleDue']);
+    });
   });
 
   it('does not accept local messages or bad payloads on the cloud channel', () => {

@@ -1,8 +1,8 @@
 # INTEGRATION_CONTRACTS.md — frozen contracts for Focus Mode (contracts-v1)
 
-> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1 implementation accepted, W2 merged to main (CI green), W2 decisions recorded (DEC-013/014/015/016). All five sign-offs ACCEPTED (§10).
+> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1/W2 implemented and merged (CI green), **W3 merged** (real macOS FOCUS-1/2 verified; 844 unit tests; 14/14 E2E), **W4 in progress**. W2 decisions (DEC-013/014/015/016) and W3/W4 additions C-14…C-20 are recorded below; all five sign-offs ACCEPTED (§10).
 > **Machine-readable source of truth:** `shared/src/` (zod schemas + inferred types). This document is the human-readable contract and is kept consistent with it by `/tmp/a2-contracts/check.mjs` (§11).
-> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016** · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
+> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016/017/019** (the W4 schedule-run lifecycle is DEC-021 — A0 to append its ADR text) · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
 > **Change process:** any change to a message, endpoint, schema, field or status code requires an ADR + this doc + `shared/` update + A2 + A8 approval + a contract test (AGENTS §5). Requests go in the table in §8 — do not edit the doc directly without that process.
 
 ---
@@ -136,7 +136,7 @@ Every list endpoint returns the standard paginated shape and accepts the standar
 ```
 
 - Query: `page` (integer ≥ 1, default `1`), `limit` (integer 1–100, default `20`), `sort` (per-resource whitelist, default below), `search` (optional, 1–100 chars, `$`/`.` operators stripped).
-- `sort` accepts a field name or the same name prefixed with `-` for descending. Whitelists live in shared: `sessionsSortSchema` (`startedAt`, `endedAt`, `plannedMinutes`, `actualMinutes`), `devicesSortSchema` (`name`, `lastSeenAt`, `createdAt`), `adminUsersSortSchema` (`name`, `email`, `createdAt`, `lastLoginAt`). Lists without a shared sort schema (schedules, notifications, presets, agent links) accept `page`/`limit` only and use a fixed deterministic sort (`createdAt` desc).
+- `sort` accepts a field name or the same name prefixed with `-` for descending. Whitelists live in shared: `sessionsSortSchema` (`startedAt`, `endedAt`, `plannedMinutes`, `actualMinutes`), `devicesSortSchema` (`name`, `lastSeenAt`, `createdAt`), `adminUsersSortSchema` (`name`, `email`, `createdAt`, `lastLoginAt`). Lists without a shared sort schema (schedules, notifications, presets, agent links) accept `page`/`limit` only and use a fixed deterministic sort (`createdAt` desc). Exception (C-18): `GET /schedules` is sorted **`startTime asc, _id asc`** (per-resource order, DEC-019).
 - Errors: `400 VALIDATION_ERROR`, `401 UNAUTHENTICATED`.
 
 ### 1.7 Shared module surface (what each package may import)
@@ -287,12 +287,12 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 9 | GET | `/devices` | `USER` | `deviceListQuerySchema` | paginated devices (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 10 | DELETE | `/devices/:id` | `USER` | — | `{"id":"<id>","revoked":true}` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
 | 11 | POST | `/devices/:id/attest` | `USER` | `attestRequestSchema` | `{"attestation":"<jwt>","expiresAt":"<iso>","algorithm":"EdDSA"}` (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `NO_DEVICE_CONNECTED`, `RATE_LIMITED` |
-| 12 | POST | `/sessions` | `USER` | `sessionCreateSchema` | session (201) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `ALREADY_FOCUSING` |
+| 12 | POST | `/sessions` | `USER` | `sessionCreateSchema` | session (**201** first create; **200** on an identical `clientSessionId` replay — C-18/REC-006) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `ALREADY_FOCUSING` |
 | 13 | PATCH | `/sessions/:id` | `USER` | `sessionPatchSchema` | session (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `CONFLICT` |
 | 14 | GET | `/sessions` | `USER` | `sessionListQuerySchema` | paginated sessions (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 15 | GET | `/allowlist` | `USER` | — | allow-list (200) | `UNAUTHENTICATED` |
 | 16 | PUT | `/allowlist` | `USER` | `allowlistPutSchema` | allow-list (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `PROTECTED_ENTRY` |
-| 17 | GET | `/schedules` | `USER` | — (page/limit) | paginated schedules (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| 17 | GET | `/schedules` | `USER` | — (page/limit) | paginated schedules (200; `startTime asc, _id asc` — C-18) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 18 | POST | `/schedules` | `USER` | `scheduleCreateSchema` | schedule (201) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 19 | PATCH | `/schedules/:id` | `USER` | `scheduleUpdateSchema` | schedule (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND` |
 | 20 | DELETE | `/schedules/:id` | `USER` | — | `{"id":"<id>"}` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
@@ -314,11 +314,15 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 36 | GET | `/admin/stats` | `ADMIN` | — | aggregate stats (200) | `UNAUTHENTICATED`, `FORBIDDEN` |
 | 37 | POST | `/agent/register` | `agent-public` | `deviceRegisterSchema` | `{"deviceId":"<id>","enrollSecret":"<secret>"}` (201) | `VALIDATION_ERROR`, `CONFLICT`, `RATE_LIMITED` |
 | 38 | POST | `/agent/enroll/poll` | `agent-secret` | `enrollPollSchema` | `{"deviceToken":"<token>","userId":"<id>","allowListVersion":1}` (200; `404` while pending/unpaired or bad secret, `410` once consumed) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `PAIRING_EXPIRED` |
-| 39 | GET | `/agent/allowlist` | `agent-device` | — | allow-list + `version` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
+| 39 | GET | `/agent/allowlist` | `agent-device` | — | `{"protectedApps": appEntry[], "userApps": appEntry[], "version": integer}` (200) — device-token auth, used for scheduled starts (C-20) | `UNAUTHENTICATED`, `NOT_FOUND` |
 | 40 | GET | `/agent/attest-key` | `agent-public` | — | `{"publicKey":"<pem>","algorithm":"EdDSA"}` (200) | — |
 | 41 | WS | `/agent-link` | `device-token (WS)` | — | cloud messages, §5 | close `4401` on bad token |
+| 42 | GET | `/sessions/active` | `USER` | — | `{"session": session\|null}` (200) — current ACTIVE session for dashboard refresh/link reconnect (C-15) | `UNAUTHENTICATED` |
+| 43 | POST | `/allowlist/preset/:id` | `USER` | — (`?mode=merge\|replace`, default `merge`; server-validated query) | allow-list (200) — preset applied to `userApps`, protected apps filtered, `protectedApps` untouched (C-16) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND` |
 
 ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — never per-user session detail.
+
+Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); the original 41-operation frozen set from TECHNICAL_DESIGN §5.2 is otherwise unchanged (C-17/C-18 clarify existing rows #12/#14/#17).
 
 ### 3.2 Request schemas (single source of truth)
 
@@ -333,7 +337,7 @@ ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — n
 | `attestRequestSchema` | #11 | `{nonce}` (16–128 URL-safe chars, from the agent `challenge`) |
 | `sessionCreateSchema` | #12 | `{deviceId, durationMin, startedAt, clientSessionId, source?}` (`source` defaults `MANUAL`) |
 | `sessionPatchSchema` | #13 | `{status, endedAt, actualMinutes, endReason}` — all four required, idempotent |
-| `sessionListQuerySchema` | #14 | `page`, `limit`, `sort`, `search`, `from`, `to`, `status`, `source`; `from ≤ to` |
+| `sessionListQuerySchema` | #14 | `page`, `limit`, `sort`, `search`, `from`, `to`, `status`, `source`; `from ≤ to`. Filters are **exactly** these — **no `deviceId` filter** (C-17); clients must not send it. |
 | `allowlistPutSchema` | #16 | `{userApps: appEntry[] (≤50, unique keys), protectedApps?: appEntry[]}` |
 | `scheduleCreateSchema` | #18 | `{name, days, startTime, durationMin, enabled?=true}` |
 | `scheduleUpdateSchema` | #19 | any non-empty subset of the create fields |
@@ -350,6 +354,12 @@ ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — n
 | `attestRequestSchema` | #11 | `nonce` is generated by the agent and single-use |
 
 Every schema is a strict object → unknown fields are rejected (NFR-013); validation failures return `400 VALIDATION_ERROR` with `details[]` (NFR-001).
+
+**Non-schema request parameters (W3/W4 additions):**
+- **C-15** `GET /sessions/active` — no body/query; response `{session: PublicSession|null}` (§3.3 session shape).
+- **C-16** `POST /allowlist/preset/:id` — query `?mode=merge|replace` (default `merge`), validated server-side against a strict enum (`VALIDATION_ERROR` otherwise); response is the standard allow-list object; protected entries in the preset are filtered out and `protectedApps` is never modified (INV-3).
+- **C-17** `GET /sessions` — exactly `page,limit,sort,search,from,to,status,source`; **no `deviceId`**.
+- **C-18** `GET /schedules` — ordering `startTime asc, _id asc`; replayed `POST /sessions` (same `clientSessionId` + same body) returns `200` with the original session (first create `201`); clients treat both as success.
 
 Mongo collections touched by these endpoints (TECHNICAL_DESIGN §4): `users`, `devices`, `sessions`, `allowlists`, `schedules`, `presets`, `scheduleRuns`, `notifications`, `agentLinks`. The API is the only writer (the dashboard and Focus Agent never touch Mongo directly).
 
@@ -837,7 +847,7 @@ Invariants: **INV-5** (restore completed before emit), **INV-4** (journal cleare
 ```
 
 #### `scheduleHeadsUp` — A → D
-Fields: `scheduleId: ObjectId`, `startsAt: iso`. Invariant: **INV-2** (a scheduled start is announced, never commanded; the user can cancel; the cloud never sends OS commands). Example:
+Fields: `scheduleId: ObjectId`, `startsAt: iso`. Invariant: **INV-2** (a scheduled start is announced, never commanded; the user can cancel; the cloud never sends OS commands). If the user cancels the heads-up, the agent reports `scheduleRunCancelled` on the cloud channel (§5.3, C-19). Example:
 
 ```json
 {
@@ -890,7 +900,7 @@ Cloud → agent may send **only** `scheduleDue` and `revoked`. There is no `ente
 
 > **Implementation note (DEC-016, see §6):** the attestation described in §4.4 is an RFC 8037 EdDSA/Ed25519 JWT signed/verified with `node:crypto`; `jsonwebtoken@9.0.3` handles only the HS256 user access token. The algorithm is unchanged — DEC-013 was amended only on the library claim.
 
-### 5.3 Message catalog — cloud channel (5 messages, frozen)
+### 5.3 Message catalog — cloud channel (6 messages, frozen)
 
 #### `heartbeat` — agent → cloud
 Fields: `state: IDLE|PAIRED|FOCUSING`, `sessionId?: uuid`. Invariants: REC-001 presence, **INV-2** (status only, no commands), **INV-6** (no window data). Example:
@@ -906,7 +916,7 @@ Fields: `state: IDLE|PAIRED|FOCUSING`, `sessionId?: uuid`. Invariants: REC-001 p
 ```
 
 #### `session.started` — agent → cloud
-Fields: `clientSessionId: uuid`, `startedAt: iso`, `plannedMinutes: 1–480`, `source: MANUAL|SCHEDULE`. Invariants: REC-006 idempotency, **INV-1/INV-2** (reporting, not commanding), **INV-6** (no OS detail). Example:
+Fields: `clientSessionId: uuid`, `startedAt: iso`, `plannedMinutes: 1–480`, `source: MANUAL|SCHEDULE`, **`scheduleRunId?: ObjectId`** (present when `source: 'SCHEDULE'` — links the session to the dispatched `scheduleRuns` doc; optional/backward-compatible so older agents still validate — DEC-021/C-19). Invariants: REC-006 idempotency, **INV-1/INV-2** (reporting, not commanding), **INV-6** (no OS detail). Example:
 
 ```json
 {
@@ -933,6 +943,19 @@ Fields: `clientSessionId: uuid`, `endedAt: iso`, `actualMinutes: 0–1440`, `sta
   "actualMinutes": 60,
   "status": "COMPLETED",
   "endReason": "COMPLETED"
+}
+```
+
+#### `scheduleRunCancelled` — agent → cloud
+Fields: `runId: ObjectId` (the dispatched `scheduleRuns` id), `at: iso`. Invariants: **INV-2 unchanged** (agent→cloud report only — the cloud still cannot command focus), FR-012 (the user cancelled the local ≥10 s heads-up) and C-19 (the run becomes `CANCELLED_BY_USER`; no session is created). Example:
+
+```json
+{
+  "v": 1,
+  "id": "c-006",
+  "type": "scheduleRunCancelled",
+  "runId": "507f1f77bcf86cd799439014",
+  "at": "2026-11-10T10:00:10.000Z"
 }
 ```
 
@@ -963,12 +986,18 @@ Fields: none. Invariants: **INV-2**, **INV-5** (agent restores first if FOCUSING
 - `clientSessionId` (UUID, generated once per focus session — by the dashboard for MANUAL starts, by the agent for SCHEDULE starts) is **the** idempotency key. The sessions collection has a unique `{userId, clientSessionId}` index.
 - `session.started` and `session.ended` may race with the dashboard's `POST /sessions` / `PATCH /sessions/:id`; the server upserts on `{userId, clientSessionId}` and only finalises once. A duplicate report with the same body → `200`, no double count; a conflicting body for an already-finalised session → `409 CONFLICT`.
 - The local-channel `sessionId` in `focusStarted`/`focusEnded` equals that `clientSessionId` (the cloud document `_id` never travels over the local channel).
+- **Schedule runs (C-19):** a `session.started` carrying `scheduleRunId` confirms the dispatched run (`STARTED` → session linked) and is idempotent under the same `clientSessionId`; `scheduleRunCancelled` flips the run to `CANCELLED_BY_USER` exactly once; a run can never be confirmed twice or by another user's device.
 
 ### 5.5 Scheduler semantics (TECHNICAL_DESIGN §8)
 
 - `node-cron` minute tick; a schedule is due when the user's local day ∈ `days`, local `HH:mm === startTime` (uses the user's IANA timezone via `Intl`), and `lastRunAt` is not in the same minute (idempotent).
-- Device `CONNECTED` + `PAIRED` → send `scheduleDue`; the run is recorded `STARTED` when the agent confirms (via `session.started`).
-- Device offline → record `scheduleRuns(MISSED)` + create a notification; **force nothing**, never queue a command for later (INV-2/FR-012).
+- Device `CONNECTED` + `PAIRED` → the server creates a `scheduleRuns` document (`status: STARTED`, `firedAt`, `deviceId`) and sends `scheduleDue {runId, scheduleId, durationMin, allowListVersion}`. The agent shows its local ≥10 s heads-up and starts focus locally only after consent — the cloud announces, never commands (INV-2).
+- **Run lifecycle (C-19, DEC-021):**
+  - **Dispatch → STARTED:** `scheduleDue` sent and the run stored as `STARTED`.
+  - **Confirm → session:** agent reports `session.started {…, source:'SCHEDULE', scheduleRunId}`; the server links the session to the run (same user/schedule/device, run still `STARTED`) and marks it confirmed. Duplicate report is idempotent (REC-006).
+  - **User cancel → CANCELLED_BY_USER:** agent sends `scheduleRunCancelled {runId, at}` for a cancelled heads-up; no session is created.
+  - **Offline at due time → MISSED:** device not `CONNECTED`+`PAIRED` at dispatch → `scheduleRuns(MISSED)` + notification; **force nothing**, never queue a command for later (INV-2/FR-012).
+  - **Stale STARTED → MISSED:** a `STARTED` run with no confirming `session.started` within **2 minutes** of `firedAt` (agent crashed after dispatch) is reaped to `MISSED` + notification, so a dead run cannot block the next one.
 - Reaper every 5 min finalises abandoned ACTIVE sessions from heartbeat bounds (`status: CANCELLED` unless the agent reported COMPLETED) — analytics honesty (FR-028).
 
 ---
@@ -997,6 +1026,20 @@ Fields: none. Invariants: **INV-2**, **INV-5** (agent restores first if FOCUSING
 | API base URL | Full base **including `/api/v1`** in `VITE_API_BASE_URL` and `AGENT_API_BASE_URL`; callers append endpoint paths only (§1.1, §1.11) | `client/src/api/http.ts`, `agent/src/config/env.ts`, `agent/src/cloud/*` |
 | Attestation | **EdDSA (Ed25519)**, 60 s TTL, bound to `nonce` + `aud=deviceId` + `sub=userId`; signed/verified via `node:crypto` (RFC 8037, DEC-016); `jsonwebtoken` only for HS256 user tokens; RS256 needs an amendment ADR | `POST /devices/:id/attest`, `GET /agent/attest-key`, agent link auth (T-044) |
 | Seed identities | `admin@demo.com / Admin@123` (ADMIN), `kabir@demo.com / Kabir@123` (USER); registration always creates USER | `server/src/seed`, README, `SEED_*` env |
+
+### 6.2 W3/W4 contract additions (A2-reviewed 2026-11-10)
+
+| Ref | Addition | Where |
+|---|---|---|
+| C-14 | Pairing attempt latch is **per authenticated user** within the 10-min TTL (DEC-017): attempts 1–5 → `400 INVALID_PAIRING_CODE`, 6th+ → `410 PAIRING_EXPIRED`; correct codes from other users unaffected | §1.9, §12 C-14 |
+| C-15 | `GET /sessions/active` (USER) → `{session: PublicSession\|null}` for dashboard refresh/link reconnect | §3.1 #42 |
+| C-16 | `POST /allowlist/preset/:id?mode=merge\|replace` (default `merge`; protected apps filtered; `protectedApps` untouched — INV-3) | §3.1 #43 |
+| C-17 | `GET /sessions` filters exactly `page,limit,sort,search,from,to,status,source` — **no `deviceId`** | §3.2 |
+| C-18 | `GET /schedules` order `startTime asc, _id asc`; replayed `POST /sessions` → `200` (first create `201`) | §3.1 #12/#17, §1.6 |
+| C-19 | Schedule-run lifecycle; new agent→cloud `scheduleRunCancelled {runId, at}`; optional `session.started.scheduleRunId` (DEC-021) | §5.3, §5.4, §5.5, §12 C-19 |
+| C-20 | `GET /agent/allowlist` (device-token auth) → `{protectedApps,userApps,version}` for scheduled starts (endpoint added by A5 in W4) | §3.1 #39 |
+
+These additions were reviewed by **A2 against the W3/W4 code and ADRs (DEC-017/DEC-019/DEC-021)** on 2026-11-10; A8 re-checks them in the W4 integration pass. INV-2 is unchanged — cloud→agent remains exactly `[scheduleDue, revoked]`.
 
 ---
 
@@ -1042,6 +1085,8 @@ Rules that never change without replacing an INV in AGENTS §3: envelopes, the 1
 
 A0 recorded W1 acceptance on 2026-11-10: **PRs #2/#3/#4 merged, CI green on `ubuntu-24.04` / `windows-latest` / `macos-latest`, unit/integration suites 353 tests green**. W2 (pairing + attestation + agent-link hub + agent cloud client + client AgentLink) is **merged to `main` with CI green**. A8 signed off the contract on 2026-11-10 (**93/93 automated contract checks; pairing E2E green on merged W2; C-12/C-13 match shipped code**), so **all five rows are ACCEPTED**; the `contracts-v1` tag stands, and any further wire change follows §9 (`contracts-v1.1`). A8/A0 also confirmed the C-12 wording (404 when `ownerId` is `null` or the enroll secret is wrong/unknown; 200 once paired with a matching secret; 410 once consumed) matches shipped code.
 
+**W4 contract additions** (C-14…C-20; new agent→cloud `scheduleRunCancelled`; optional `session.started.scheduleRunId`) were **A2-reviewed on 2026-11-10** and are recorded in §12; A8 re-checks them in the W4 integration pass.
+
 ---
 
 ## 11. Consistency check (doc ↔ shared ↔ TECHNICAL_DESIGN)
@@ -1052,26 +1097,26 @@ Run from the repo root (script in `/tmp`, not committed):
 node /tmp/a2-contracts/check.mjs
 ```
 
-Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc exists in TECHNICAL_DESIGN §5.2 (normalised `:id` params) and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) sign-off table has all five rows ACCEPTED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping + current W2 control scope are documented; (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 42/42).
+Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc is traceable to TECHNICAL_DESIGN §5.2 **or** an accepted DEC-019 addition, and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented and the cloud→agent whitelist is exactly `[scheduleDue, revoked]`; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) sign-off table has all five rows ACCEPTED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping + current W2 control scope are documented; (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence; (q) cloud channel documents all 6 messages incl. `scheduleRunCancelled` as AGENT_TO_CLOUD; (r) `session.started.scheduleRunId` is documented (DEC-021/C-19); (s) C-14…C-20 are documented; (t) the W4 A2-review line is present. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 43/43).
 
 Script output (pasted from the actual run, 2026-11-10):
 
 ```
 $ node /tmp/a2-contracts/check.mjs
-[PASS] shared module loads from shared/dist/index.js — 121 exports, PROTOCOL_VERSION=1
+[PASS] shared module loads from shared/dist/index.js — 122 exports, PROTOCOL_VERSION=1
 [PASS] local messages documented (§4.5) — 16/16 documented, missing=[]
 [PASS] local message directions match LOCAL_MESSAGE_DIRECTIONS — 16/16 exact
-[PASS] cloud messages documented (§5.3) — 5/5 documented, missing=[]
+[PASS] cloud messages documented (§5.3) — 6/6 documented, missing=[]
 [PASS] cloud directions match CLOUD_MESSAGE_DIRECTIONS — 5/5 exact
 [PASS] INV-2: cloud→agent set is exactly [revoked, scheduleDue] — cloud→agent=[scheduleDue,revoked]
 [PASS] request schemas exported by shared and named in doc — 23/23 ok, notExported=[], notInDoc=[]
-[PASS] endpoint table matches the frozen 41-operation set — 41/41 documented, missing=[], invented=[]
-[PASS] every documented path is traceable to TECHNICAL_DESIGN §5.2 — 41/41 traceable, unknown=[]
+[PASS] endpoint table matches the frozen 41-operation set — 43/43 documented, missing=[], invented=[]
+[PASS] every documented path is traceable to TECHNICAL_DESIGN §5.2 or DEC-019 — 43/43 traceable, adrMissing=[], unknown=[]
 [PASS] Mongo collections 9/9 documented and present in TECHNICAL_DESIGN §4 — 9/9 ok, missing=[]
 [PASS] error codes 13/13 with matching HTTP status — 13/13 present, status mismatches=[]
 [PASS] invariants INV-1…INV-6 documented — 6/6 present, missing=[]
 [PASS] envelope v:1 and PROTOCOL_VERSION=1 referenced — PROTOCOL_VERSION=1, envelope example present
-[PASS] fenced JSON examples parse as valid JSON — 42/42 valid (≥20 required)
+[PASS] fenced JSON examples parse as valid JSON — 43/43 valid (≥20 required)
 [PASS] DEC-003 pairing-code rule documented + contract test present — doc §4.8 + shared/src/protocol.test.ts
 [PASS] DEC-013: full base URL, EdDSA attestation, seed identities documented — VITE_API_BASE_URL + AGENT_API_BASE_URL + EdDSA + admin@demo.com + Kabir@123
 [PASS] governance: requested-changes table, change process, 5 ACCEPTED sign-offs — 5 ACCEPTED, 0 PENDING sign-off rows
@@ -1082,7 +1127,12 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] DEC-016 node:crypto EdDSA implementation note documented (§1.11/§4.4/§5.2/§6.1/§12) — EdDSA/Ed25519 via node:crypto; jsonwebtoken only HS256 user tokens
 [PASS] C-05 authError vocabulary agrees with C-13 (§4.3/§4.5/§12) — wrong sub -> FORBIDDEN; everything else -> UNAUTHENTICATED; NOT_PAIRED only focusRejected
 [PASS] A8 sign-off recorded with evidence (93/93 checks, pairing E2E, C-12/C-13) — all five §10 rows ACCEPTED
-RESULT: 24/24 checks PASS
+[PASS] DEC-021 new message scheduleRunCancelled is AGENT_TO_CLOUD (cloud channel 6 = 4 up / 2 down) — types=6, up=4, down=[scheduleDue,revoked]
+[PASS] session.started.scheduleRunId is optional in shared and documented (DEC-021/C-19) — schemaHasField=true, doc mentions DEC-021=true
+[PASS] contract decisions C-14…C-20 documented in §12 — 7/7 present, missing=[]
+[PASS] W4 additions recorded as A2-reviewed (§10/§6.2) — §10 + §6.2 present
+[PASS] schedule-run lifecycle C-19 documented (STARTED confirm/cancel/offline MISSED/stale 2 min) — dispatch→confirm→CANCELLED_BY_USER | offline MISSED | stale 2 min MISSED
+RESULT: 29/29 checks PASS
 $ echo $?
 0
 ```
@@ -1093,7 +1143,7 @@ $ echo $?
 
 ## 12. Clarifications and contract decisions (documented, no silent changes)
 
-These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016. Items marked **ADR** need an ADR before implementation reaches them.
+These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016 and the W3/W4 additions DEC-017/DEC-019 (the schedule-run lifecycle is DEC-021 — A0 to append its ADR text to `docs/DECISIONS.md`). Items marked **ADR** need an ADR before implementation reaches them.
 
 | # | Topic | Decision / issue | Owner | Needs ADR |
 |---|---|---|---|---|
@@ -1110,7 +1160,13 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 | C-11 | Local-channel close codes | An oversized frame (>16 KB, `ws` `maxPayload`) is closed by the `ws` library with **`1009`** (message too big); explicit protocol/policy violations use **`1008`**. The dashboard treats **both** as a disconnect (fail closed, reset handshake, reconnect with backoff). Documentation correction only — no behaviour change (DEC-015). | A7/A2 | no — DEC-015 |
 | C-12 | Pending enroll-poll status | **RESOLVED (documentation, W2).** `POST /agent/enroll/poll` returns `404 NOT_FOUND` while the device is registered but not yet owned/paired (`ownerId` null) **and** for a wrong/unknown `enrollSecret` (indistinguishable, no enumeration); `200` + token once paired with a matching secret; `410 PAIRING_EXPIRED` after the token was issued once (enrollment consumed). The Focus Agent treats `404`/`202`/`204`/`200`-without-token as pending and retries with backoff until the 10-min code TTL; `400/401/403/409/410` are terminal. Documented so a future server change cannot silently break pairing (§3.1 #38, §3.2, §5.1 step 5). Wording confirmed correct against shipped code by A0/A8 (2026-11-10). | A5/A7 | no — documentation |
 | C-13 | Local `auth` error mapping | **RESOLVED (documentation, W2).** A correctly signed attestation whose `sub` is another account → `authError{code:'FORBIDDEN'}`; every other failure (malformed, bad alg/signature, expired/over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unknown/unusable key, unpaired) → `authError{code:'UNAUTHENTICATED'}`. Pre-auth control frames → `focusRejected{code:'UNAUTHENTICATED'}` + close `1008`. Authenticated control messages (`enterFocus`/`exitFocus`/`listApps`) currently → `focusRejected{code:'INVALID'}` until W3 wires FocusController + REC-004 consent — **current W2 scope, not final contract** (§4.3). | A7 | no — documentation |
-| C-14 | Pairing attempt latch scope | **Documented W2 implementation detail (no requirement change).** SEC-5's "≤5 attempts per code" is enforced as a latch of **5 failed guesses per authenticated user** within the 10-min code TTL (the server looks pending devices up by peppered digest, so a wrong guess cannot be attributed to one pending code). The 6th user attempt → `410 PAIRING_EXPIRED` for the rest of the window; correct codes presented by other users are unaffected. Residual risk bounded by the pair/register rate limits; tracked for W6 `SECURITY_REVIEW.md`. Needs an ADR if the team wants strict per-code semantics. | A5/A9 | proposed (if strict per-code required) |
+| C-14 | Pairing attempt latch scope | **ACCEPTED — DEC-017.** SEC-5's "≤5 attempts per code" is implemented as a latch of **5 failed guesses per authenticated user** within the 10-min code TTL (the server looks pending devices up by peppered digest, so a wrong guess cannot be attributed to one pending code): attempts 1–5 → `400 INVALID_PAIRING_CODE`, 6th+ → `410 PAIRING_EXPIRED` for that user/window; correct codes from other users are unaffected. Residual risk (many accounts) accepted and tracked for W6 `SECURITY_REVIEW.md`; strict per-code semantics would need a coarse code-prefix bucket counter (documented, not implemented). | A5/A9 | no — DEC-017 |
+| C-15 | `GET /sessions/active` | **ACCEPTED — DEC-019.** USER-scoped helper returning `{session: PublicSession\|null}` for the caller's current `ACTIVE` session (dashboard refresh after reload / local-link reconnect). Not in the original 41-operation TECHNICAL_DESIGN §5.2 table; uses only frozen response shapes (§3.1 #42). | A5/A4 | no — DEC-019 |
+| C-16 | `POST /allowlist/preset/:id` | **ACCEPTED — DEC-019.** Applies an admin preset to `userApps` with `?mode=merge\|replace` (default `merge`, strict server-validated enum); preset entries that are protected are filtered out and `protectedApps` is never modified (**INV-3**); `VALIDATION_ERROR` if the merge would exceed 50 user apps, `NOT_FOUND` for unknown preset (§3.1 #43). | A5/A4 | no — DEC-019 |
+| C-17 | Session list filters | **ACCEPTED — DEC-019.** `GET /sessions` filters stay exactly `page,limit,sort,search,from,to,status,source`; there is **no `deviceId` filter** (adding one would need a shared-schema change and no AC requires it). Clients must not send it. | A2/A4 | no — DEC-019 |
+| C-18 | Schedule ordering + session replay | **ACCEPTED — DEC-019.** `GET /schedules` is ordered `startTime asc, _id asc` (per-resource sort, not the generic `createdAt desc`). Replayed `POST /sessions` with the same `clientSessionId` and body returns **200** with the original session; the first create is **201**. Clients treat both as success. | A5/A4 | no — DEC-019 |
+| C-19 | Schedule-run lifecycle | **ACCEPTED — DEC-021 (ADR text pending in DECISIONS.md — A0).** Dispatch: server creates `scheduleRuns(STARTED)` and sends `scheduleDue`. Confirm: agent `session.started` with optional **`scheduleRunId`** links the session to the run (idempotent; same user/schedule/device). Cancel: agent sends new agent→cloud **`scheduleRunCancelled {runId, at}`** for a cancelled heads-up → run `CANCELLED_BY_USER`, no session. Offline at due time → `MISSED` + notification. Stale `STARTED` with no confirming `session.started` within **2 min** of `firedAt` → reaped to `MISSED` + notification. Cloud→agent whitelist unchanged (INV-2). | A5/A7 | yes — DEC-021 |
+| C-20 | `GET /agent/allowlist` | **ACCEPTED for W4.** Agent-facing, `Authorization: Bearer <deviceToken>` (not a user JWT); returns `{protectedApps, userApps, version}` so a scheduled start can use the current allow-list and detect version drift. Endpoint added by A5 in W4; already present in the frozen endpoint table (#39) — this records the response shape/auth. | A5/A7 | no |
 
 ---
 
@@ -1121,4 +1177,5 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 - W2 documentation pass (branch `feat/a2-contracts-w2`): `docs(contracts): record DEC-013/014 conventions and W2 sign-offs` — DEC-013 §1.11/§3/§6, DEC-014 pairing digest §2/§12, `1009`/`1008` close codes §4.2/§4.7/§12, W1 sign-offs §10.
 - W2 documentation pass b (branch `feat/a2-contracts-w2b`, this file only): `docs(contracts): document pending enroll-poll, auth errors and node:crypto EdDSA` — C-12 pending enroll-poll (§3.1 #38, §3.2, §5.1), C-13 auth/authError mapping + current W2 scope (§4.3, §12), DEC-016 implementation note (§1.11, §4.4, §5.2, §6.1, §12 C-09), W2 merged-status line (§0, §10), delta notes C-14. No code, schema or wire changes.
 - Post-W2 documentation pass c (branch `feat/a2-contracts-c05`, this file only): `docs(contracts): fix C-05 auth error vocabulary and record A8 sign-off` — C-05 rewritten to reference C-13 (§4.3/§4.5/§12 agree, `NOT_PAIRED` is `focusRejected` only), A8 sign-off recorded in §10 (all five rows ACCEPTED), header/§13 status updated. No code, schema or wire changes.
-- Open: C-04 typed response schemas in `contracts-v1.1` (DEC-015); C-14 decision only if strict per-code attempt semantics are required.
+- W4 contract pass (branch `feat/a2-w4-contracts`): `feat(shared): add schedule-run lifecycle message and document W3/W4 contracts` — `shared/src/protocol.ts` adds optional `session.started.scheduleRunId` + new agent→cloud `scheduleRunCancelled`; this doc records C-14…C-20 (§1.6, §3.1, §3.2, §4.5, §5.3, §5.4, §5.5, §6.2, §10, §12). No other package touched.
+- Open: A0 to append the DEC-021 ADR text to `docs/DECISIONS.md`; C-04 typed response schemas in `contracts-v1.1` (DEC-015); A8 W4 integration re-check of C-14…C-20.

@@ -256,7 +256,13 @@ export const heartbeatMessageSchema = z.strictObject({
 });
 export type HeartbeatMessage = z.infer<typeof heartbeatMessageSchema>;
 
-/** Agent → cloud session report; idempotent on `clientSessionId` (REC-006). */
+/**
+ * Agent → cloud session report; idempotent on `clientSessionId` (REC-006).
+ * `scheduleRunId` is **optional and backward-compatible** (DEC-021): it is present when the
+ * session was started from the scheduler (`source: 'SCHEDULE'`) and links the session to the
+ * `scheduleRuns` document created when `scheduleDue` was dispatched. It is absent for MANUAL
+ * sessions and for older W2/W3 agents; the server confirms STARTED → session via this field.
+ */
 export const sessionStartedMessageSchema = z.strictObject({
   ...ENVELOPE_SHAPE,
   type: z.literal('session.started'),
@@ -264,6 +270,7 @@ export const sessionStartedMessageSchema = z.strictObject({
   startedAt: isoDateTimeSchema,
   plannedMinutes: durationMinSchema,
   source: focusSourceSchema,
+  scheduleRunId: objectIdSchema.optional(),
 });
 export type SessionStartedMessage = z.infer<typeof sessionStartedMessageSchema>;
 
@@ -278,6 +285,18 @@ export const sessionEndedMessageSchema = z.strictObject({
   endReason: endReasonSchema,
 });
 export type SessionEndedMessage = z.infer<typeof sessionEndedMessageSchema>;
+
+/**
+ * Agent → cloud: the user cancelled the local ≥10 s schedule heads-up (DEC-021/C-19).
+ * The referenced `scheduleRun` becomes `CANCELLED_BY_USER`; no session is started.
+ */
+export const scheduleRunCancelledMessageSchema = z.strictObject({
+  ...ENVELOPE_SHAPE,
+  type: z.literal('scheduleRunCancelled'),
+  runId: objectIdSchema,
+  at: isoDateTimeSchema,
+});
+export type ScheduleRunCancelledMessage = z.infer<typeof scheduleRunCancelledMessageSchema>;
 
 /** Cloud → agent: the only way focus can start without a dashboard (INV-2, FR-012). */
 export const scheduleDueMessageSchema = z.strictObject({
@@ -360,6 +379,7 @@ export const cloudMessageSchema = z.discriminatedUnion('type', [
   heartbeatMessageSchema,
   sessionStartedMessageSchema,
   sessionEndedMessageSchema,
+  scheduleRunCancelledMessageSchema,
   scheduleDueMessageSchema,
   revokedMessageSchema,
 ]);
@@ -376,6 +396,7 @@ export const CLOUD_MESSAGE_DIRECTIONS: Readonly<Record<CloudMessageType, CloudMe
     heartbeat: 'AGENT_TO_CLOUD',
     'session.started': 'AGENT_TO_CLOUD',
     'session.ended': 'AGENT_TO_CLOUD',
+    scheduleRunCancelled: 'AGENT_TO_CLOUD',
     scheduleDue: 'CLOUD_TO_AGENT',
     revoked: 'CLOUD_TO_AGENT',
   });
