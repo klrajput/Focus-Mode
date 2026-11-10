@@ -26,6 +26,7 @@ export const LOG_REDACT_PATHS: readonly string[] = [
   'req.body.deviceToken',
   'req.body.enrollSecret',
   'req.body.attestation',
+  'req.body.code',
   // Secrets in application log objects: top level and one level of nesting.
   'password',
   '*.password',
