@@ -16,6 +16,8 @@ const ignores = [
   'client/dist/**',
   'project-blueprint/**',
   'docs/**',
+  '.tmp/**',
+  '.ghcache/**',
 ];
 
 export default [
