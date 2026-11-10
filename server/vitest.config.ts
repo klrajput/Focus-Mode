@@ -26,8 +26,9 @@ export default defineConfig({
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
-      // >= 32 chars so config/env.ts (SEC-2) accepts it; never a real secret.
-      JWT_SECRET: 'test-jwt-secret-0123456789abcdef0123456789abcdef',
+      // >= 32 chars so config/env.ts (SEC-2) accepts it; explicitly a placeholder, never a
+      // real secret (gitleaks allowlists CHANGE_ME_* values — see .gitleaks.toml).
+      JWT_SECRET: 'CHANGE_ME_test_only_jwt_secret_padding_0000',
       JWT_EXPIRES_IN: '30m',
       CLIENT_URL: 'http://localhost:5173,http://localhost:5174',
       RATE_LIMIT_AUTH_MAX: '1000',
