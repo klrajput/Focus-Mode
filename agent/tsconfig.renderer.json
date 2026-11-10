@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "legacy",
+    "declaration": false,
+    "declarationMap": false,
+    "rootDir": "src/ui",
+    "outDir": "dist/ui"
+  },
+  "include": ["src/ui/renderer.ts"],
+  "exclude": []
+}
