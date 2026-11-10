@@ -55,7 +55,7 @@ export function makeAuthValue(overrides: Partial<AuthContextValue> = {}): AuthCo
 export function makeAgentLinkValue(
   overrides: Partial<AgentLinkContextValue> = {},
 ): AgentLinkContextValue {
-  return {
+  const base: AgentLinkContextValue = {
     status: 'DISCONNECTED',
     capabilities: null,
     session: null,
@@ -64,12 +64,21 @@ export function makeAgentLinkValue(
     connecting: false,
     helpCardVisible: false,
     headsUp: null,
+    runningApps: null,
+    linkLost: false,
+    startedSessionId: null,
+    lastEnded: null,
+    lastStartReaside: null,
     connect: () => undefined,
     refresh: () => undefined,
     showHelpCard: () => undefined,
     dismissHelpCard: () => undefined,
     notifyPaired: () => undefined,
-    endFocus: () => undefined,
-    ...overrides,
+    endFocus: () => true,
+    startFocus: () => true,
+    requestRunningApps: () => undefined,
+    dismissEndedSession: () => undefined,
   };
+
+  return Object.assign(base, overrides);
 }

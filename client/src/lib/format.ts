@@ -53,6 +53,12 @@ export function formatDate(iso: string): string {
   }).format(date);
 }
 
+/** Local clock time, e.g. "10:30" — the consent modal's "ends at" value (UX_SPEC §5). */
+export function formatClockTime(date: Date): string {
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
 /** "Good evening" — used by the dashboard greeting (UX_SPEC §4.3). */
 export function greetingFor(date: Date = new Date()): string {
   const hour = date.getHours();

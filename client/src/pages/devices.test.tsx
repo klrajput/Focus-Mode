@@ -189,8 +189,9 @@ describe('DevicesPage', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('unpairs after confirmation and refreshes the list', async () => {
+  it('unpairs after confirmation, refreshes the list and re-handshakes the agent (KI-010)', async () => {
     const user = userEvent.setup();
+    const refresh = vi.fn();
     let removed = false;
 
     const fetchMock = installFetch((url, init) => {
@@ -201,7 +202,7 @@ describe('DevicesPage', () => {
       return fakeResponse(devicePage(removed ? [] : [DEVICE]));
     });
 
-    renderDevices();
+    renderDevices(makeAgentLinkValue({ refresh }));
     await screen.findByText("Kabir's MacBook");
 
     await user.click(screen.getByRole('button', { name: 'Unpair' }));
@@ -218,5 +219,8 @@ describe('DevicesPage', () => {
     const deleteCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'DELETE');
     expect(deleteCall).toBeDefined();
     expect(String(deleteCall?.[0])).toContain(`/devices/${DEVICE.id}`);
+
+    // KI-010: the badge must flip to "Not paired" without a reload, so the shell re-handshakes.
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

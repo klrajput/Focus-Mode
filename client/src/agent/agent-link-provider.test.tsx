@@ -20,7 +20,12 @@ import type {
 import { AuthContext } from '../auth/auth-context';
 import { createTestQueryClient, makeAuthValue, makeUser } from '../test/test-utils';
 import { AgentLinkProvider, useAgentLink, type AgentLinkFactory } from './agent-link-provider';
-import type { AgentLinkClient, AgentLinkEvents } from './agent-link';
+import {
+  AgentLink,
+  type AgentLinkClient,
+  type AgentLinkEvents,
+  type LinkSocket,
+} from './agent-link';
 
 const SESSION_ID = '9b2f8a51-1c0e-4b6a-8f03-5d7c9e1a2b3c';
 const STARTED_AT = '2026-11-10T10:05:00.000Z';
@@ -39,6 +44,22 @@ const HELLO_UNPAIRED: HelloMessage = {
 };
 
 const HELLO_PAIRED: HelloMessage = { ...HELLO_UNPAIRED, id: 'a-002', paired: true };
+
+const CHALLENGE = {
+  v: 1,
+  id: 'a-007',
+  type: 'challenge',
+  nonce: 'abcdefghijklmnopqrstuvwxyz012345',
+} as const;
+
+const STATE_PAIRED: StateMessage = {
+  v: 1,
+  id: 'a-008',
+  type: 'state',
+  state: 'PAIRED',
+  protected: [],
+  allowList: [],
+};
 
 const AUTH_OK: AuthOkMessage = {
   v: 1,
@@ -94,7 +115,8 @@ class FakeLink implements AgentLinkClient {
   readonly dispose = vi.fn();
   readonly requestState = vi.fn();
   readonly notifyPaired = vi.fn();
-  readonly endFocus = vi.fn();
+  readonly endFocus = vi.fn(() => true);
+  readonly requestApps = vi.fn();
   readonly send = vi.fn(() => true);
 
   private readonly listeners = new Map<keyof AgentLinkEvents, Set<AnyListener>>();
@@ -129,6 +151,9 @@ function Probe() {
       <span data-testid="planned">{agent.session?.plannedMinutes ?? '-'}</span>
       <span data-testid="help">{agent.helpCardVisible ? 'visible' : 'hidden'}</span>
       <span data-testid="detail">{agent.detail}</span>
+      <span data-testid="link-lost">{agent.linkLost ? 'lost' : 'live'}</span>
+      <span data-testid="ended">{agent.lastEnded?.reason ?? '-'}</span>
+      <span data-testid="started">{agent.startedSessionId ?? '-'}</span>
       <button type="button" onClick={agent.dismissHelpCard}>
         dismiss
       </button>
@@ -136,7 +161,7 @@ function Probe() {
   );
 }
 
-function renderProbe(link: FakeLink) {
+function renderProbe(link: AgentLinkClient) {
   const factory: AgentLinkFactory = () => link;
 
   return render(
@@ -238,4 +263,109 @@ describe('AgentLinkProvider', () => {
 
     expect(link.dispose).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the running session visible and flags the lost link when the socket drops (F-02)', () => {
+    const link = new FakeLink();
+    renderProbe(link);
+
+    act(() => link.emit('hello', HELLO_PAIRED));
+    act(() => link.emit('state', STATE_FOCUSING));
+    expect(screen.getByTestId('ends')).toHaveTextContent(ENDS_AT);
+    expect(screen.getByTestId('link-lost')).toHaveTextContent('live');
+
+    act(() =>
+      link.emit('status', {
+        status: 'DISCONNECTED',
+        detail: 'The connection to your Focus Agent closed. Reconnecting…',
+      }),
+    );
+
+    expect(screen.getByTestId('status')).toHaveTextContent('DISCONNECTED');
+    expect(screen.getByTestId('ends')).toHaveTextContent(ENDS_AT);
+    expect(screen.getByTestId('link-lost')).toHaveTextContent('lost');
+
+    // A fresh state frame from the agent is the authority and clears the warning.
+    act(() => link.emit('state', STATE_FOCUSING));
+    expect(screen.getByTestId('link-lost')).toHaveTextContent('live');
+
+    // The agent's `focusEnded` is recorded once for the REST sync.
+    act(() => link.emit('focusEnded', FOCUS_ENDED));
+    expect(screen.getByTestId('ended')).toHaveTextContent('USER');
+    expect(screen.getByTestId('ends')).toHaveTextContent('-');
+  });
+
+  it('KI-010: flips Not paired → Connected without a reload when the agent pairs (real link)', async () => {
+    const sockets: MockLinkSocket[] = [];
+    const link = new AgentLink({
+      socketFactory: (url, protocols) => {
+        const socket = new MockLinkSocket(url, protocols);
+        sockets.push(socket);
+        return socket;
+      },
+      resolveDeviceId: async () => '507f1f77bcf86cd799439011',
+      attest: async () => 'header.payload.signature-header-payload-signature',
+    });
+
+    renderProbe(link);
+
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    socket?.open();
+    act(() => socket?.receive(HELLO_UNPAIRED));
+    expect(screen.getByTestId('status')).toHaveTextContent('IDLE');
+
+    // The dashboard nudges, the agent polls its token and re-issues a challenge on the SAME socket.
+    await act(async () => {
+      socket?.receive(CHALLENGE);
+      // The attestation round-trip resolves asynchronously (resolveDeviceId → attest → auth).
+      await Promise.resolve();
+    });
+
+    expect(socket?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+
+    await act(async () => {
+      socket?.receive(AUTH_OK);
+      socket?.receive(STATE_PAIRED);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('status')).toHaveTextContent('PAIRED');
+    expect(screen.getByTestId('version')).toHaveTextContent('1.4.0');
+  });
 });
+
+/** Minimal scripted socket so the provider test can drive the real AgentLink (KI-010). */
+class MockLinkSocket implements LinkSocket {
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  readyState = 0;
+  readonly sent: string[] = [];
+
+  constructor(
+    readonly url: string,
+    readonly protocols: readonly string[],
+  ) {}
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 3;
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.(new Event('open'));
+  }
+
+  receive(payload: unknown): void {
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(payload) }));
+  }
+
+  frames(): { type: string }[] {
+    return this.sent.map((raw) => JSON.parse(raw) as { type: string });
+  }
+}

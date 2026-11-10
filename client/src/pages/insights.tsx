@@ -93,7 +93,7 @@ export function InsightsPage() {
         {insightsQuery.isError ? (
           <ErrorState
             title="We couldn't load your insights."
-            message="Your last known numbers are not shown because this dashboard does not keep a stale cache."
+            message="Check your connection and try again."
             code={errorCodeOf(insightsQuery.error)}
             onRetry={() => void insightsQuery.refetch()}
           />
@@ -178,8 +178,7 @@ export function InsightsPage() {
                     </div>
                   )}
                   <p className="mt-3 text-[13px] text-muted">
-                    The Recharts daily-focus chart lands with T-033 (W2). This table is the
-                    accessible equivalent of the same data, so no numbers are guessed.
+                    This table is the accessible view of your daily focus minutes.
                   </p>
                 </CardBody>
               </Card>

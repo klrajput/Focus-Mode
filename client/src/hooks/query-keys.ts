@@ -15,7 +15,11 @@ import type {
 
 export const queryKeys = {
   me: ['me'] as const,
+  /** Prefix for every `GET /sessions` list (also used to invalidate all of them at once). */
+  sessionsRoot: ['sessions'] as const,
   sessions: (params: SessionListParams = {}) => ['sessions', params] as const,
+  /** Prefix for every `GET /insights` range query. */
+  insightsRoot: ['insights'] as const,
   insights: (range: InsightsRange) => ['insights', range] as const,
   devices: (params: DeviceListParams = {}) => ['devices', params] as const,
   allowlist: ['allowlist'] as const,

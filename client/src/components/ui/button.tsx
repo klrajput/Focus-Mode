@@ -26,8 +26,8 @@ const VARIANT_CLASSES: Readonly<Record<ButtonVariant, string>> = {
 };
 
 const SIZE_CLASSES: Readonly<Record<ButtonSize, string>> = {
-  // 44 px touch target below md, 40 px on desktop (UX_SPEC §8).
-  sm: 'h-10 px-3 text-sm md:h-9',
+  // 44 px touch target below md, 40 px on desktop (UX_SPEC §8; `sm` keeps 40 px at every width).
+  sm: 'h-10 px-3 text-sm md:h-10',
   md: 'h-11 px-4 text-sm md:h-10',
 };
 

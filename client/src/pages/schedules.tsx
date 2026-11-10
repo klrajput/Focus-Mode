@@ -29,11 +29,6 @@ export function SchedulesPage() {
       <PageHeader
         title="Schedules"
         description={user === null ? undefined : `Times shown in ${user.timezone}.`}
-        actions={
-          <StatusBadge tone="info" icon={CalendarClock}>
-            Read-only in W1
-          </StatusBadge>
-        }
       />
 
       {schedulesQuery.isPending ? (
@@ -57,7 +52,7 @@ export function SchedulesPage() {
         <EmptyState
           icon={CalendarClock}
           title="No schedules yet. Add one for your next deep-work block."
-          footnote="Creating schedules lands with T-035 (W2). A scheduled session starts only while your Focus Agent is connected, and only after a 10-second heads-up you can cancel."
+          footnote="A scheduled session starts only while your Focus Agent is connected, and only after a 10-second heads-up you can cancel."
         />
       ) : null}
 
@@ -96,8 +91,7 @@ export function SchedulesPage() {
           </ul>
 
           <p className="text-[13px] text-muted">
-            Creating, editing and enabling schedules land with T-035 (W2) — this list is read-only
-            today.
+            Creating and editing schedules aren&apos;t available yet.
           </p>
         </div>
       ) : null}

@@ -42,9 +42,6 @@ export function AdminPage() {
                   : 'Newest first'}
               </p>
             </div>
-            <StatusBadge tone="info" icon={User}>
-              Search and filters land with T-073
-            </StatusBadge>
           </div>
 
           <CardBody>
@@ -107,8 +104,8 @@ export function AdminPage() {
         </Card>
 
         <p className="text-[13px] text-muted">
-          Deactivate/activate, presets, download links and aggregate stats land with T-073 (W3) —
-          this users list is read-only today.
+          User management actions, presets, download links and aggregate stats aren&apos;t available
+          yet.
         </p>
       </div>
     </>

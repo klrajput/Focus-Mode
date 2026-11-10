@@ -116,6 +116,10 @@ export function DevicesPage() {
   }
 
   function handleUnpaired(): void {
+    // KI-010: the revoked agent keeps its already-authenticated loopback socket open, so the badge
+    // would stay "Connected" until a reload. Re-handshaking now makes the fresh `hello` report
+    // `paired: false` and the badge flips to "Not paired" without a reload.
+    agent.refresh();
     void devicesQuery.refetch();
   }
 

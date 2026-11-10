@@ -26,12 +26,17 @@ import type {
   AgentCapabilities,
   AgentConnectionStatus,
   AgentState,
+  AppEntry,
   AuthErrorMessage,
+  EndReason,
+  FocusEndedMessage,
   FocusRejectedMessage,
   FocusStartedMessage,
   HelloMessage,
+  RunningApp,
   ScheduleHeadsUpMessage,
   StateMessage,
+  AppsMessage,
 } from '@focus-mode/shared';
 
 import { devicesApi } from '../api/endpoints/devices';
@@ -40,6 +45,12 @@ import { useAuth } from '../auth/auth-context';
 import { FOCUS_REJECTED_MESSAGES } from '../copy/errors';
 import { AgentLink, type AgentLinkClient, type AgentLinkOptions } from './agent-link';
 
+/**
+ * Consent record sent with every `enterFocus` (FR-009; INTEGRATION_CONTRACTS §4.5).
+ * The dashboard's consent modal is the gate — the agent still shows its own native first-run dialog.
+ */
+export const CONSENT_VERSION = 'consent-v1';
+
 /** One active session as reported by the agent (`state.session` / `focusStarted`). */
 export interface AgentSessionSummary {
   sessionId: string;
@@ -47,6 +58,24 @@ export interface AgentSessionSummary {
   endsAt: string;
   plannedMinutes: number;
   source: 'MANUAL' | 'SCHEDULE';
+}
+
+/** Terminal event from the agent — the dashboard reports it to `PATCH /sessions/:id`. */
+export interface AgentSessionEnd {
+  sessionId: string;
+  at: string;
+  reason: EndReason;
+  actualMinutes: number;
+}
+
+/** Everything `StartFocusCard` needs to ask the agent to start a session. */
+export interface StartFocusRequest {
+  durationMin: number;
+  allowList: readonly AppEntry[];
+  /** "Keep new apps aside" toggle (UX_SPEC §5, default on). */
+  reaside: boolean;
+  /** Idempotency key shared with `POST /sessions` (REC-006). */
+  clientSessionId: string;
 }
 
 /** Everything the shell and `/devices` need from the local channel. */
@@ -62,6 +91,16 @@ export interface AgentLinkContextValue {
   /** UX_SPEC §6.3 card visibility (dismissible, never a fake "Connected"). */
   helpCardVisible: boolean;
   headsUp: { scheduleId: string; startsAt: string } | null;
+  /** Running apps from `listApps` (labels only, INV-6); `null` until the agent answers. */
+  runningApps: readonly RunningApp[] | null;
+  /** The link dropped while a session was running — the agent keeps it running (F-02). */
+  linkLost: boolean;
+  /** Set only by a `focusStarted` frame, so a reconnect/resync never re-triggers a start. */
+  startedSessionId: string | null;
+  /** Last `focusEnded`, consumed once by the REST session sync. */
+  lastEnded: AgentSessionEnd | null;
+  /** The "keep new apps aside" choice sent with the running session; `null` after a resync. */
+  lastStartReaside: boolean | null;
   /** Re-attempt the current scan/connection without changing anything else. */
   connect: () => void;
   /** Full reconnect: drop the socket, re-scan 4545–4549 and re-run the handshake. */
@@ -70,8 +109,14 @@ export interface AgentLinkContextValue {
   dismissHelpCard: () => void;
   /** Tell the Focus Agent that `/devices/pair` succeeded (a nudge only, REC-002). */
   notifyPaired: () => void;
-  /** Ask the agent to end the running session (End Focus in `FocusIndicator`). */
-  endFocus: () => void;
+  /** Ask the agent to end the running session (End Focus). `false` when the message was not sent. */
+  endFocus: () => boolean;
+  /** Send `enterFocus` after the consent modal was confirmed. `false` when no socket is open. */
+  startFocus: (request: StartFocusRequest) => boolean;
+  /** Ask the agent which apps are running, for the consent summary (REC-007). */
+  requestRunningApps: () => void;
+  /** Clear the ended-session summary on `/focus` after the user dismisses it. */
+  dismissEndedSession: () => void;
 }
 
 export const AgentLinkContext = createContext<AgentLinkContextValue | null>(null);
@@ -94,6 +139,11 @@ interface AgentLinkState {
   helpCardVisible: boolean;
   helpDismissed: boolean;
   headsUp: { scheduleId: string; startsAt: string } | null;
+  runningApps: readonly RunningApp[] | null;
+  linkLost: boolean;
+  startedSessionId: string | null;
+  lastEnded: AgentSessionEnd | null;
+  lastStartReaside: boolean | null;
 }
 
 type AgentLinkAction =
@@ -103,14 +153,17 @@ type AgentLinkAction =
   | { type: 'authOk' }
   | { type: 'authError'; message: AuthErrorMessage }
   | { type: 'state'; message: StateMessage }
+  | { type: 'apps'; message: AppsMessage }
   | { type: 'focusStarted'; message: FocusStartedMessage }
-  | { type: 'focusEnded' }
+  | { type: 'focusEnded'; message: FocusEndedMessage }
   | { type: 'headsUp'; message: ScheduleHeadsUpMessage }
   | { type: 'focusRejected'; message: FocusRejectedMessage }
   | { type: 'error'; message: { message: string } }
   | { type: 'connectFailed' }
   | { type: 'showHelp' }
   | { type: 'dismissHelp' }
+  | { type: 'startRequested'; reaside: boolean }
+  | { type: 'dismissEnded' }
   | { type: 'refresh' }
   | { type: 'reset' };
 
@@ -124,6 +177,11 @@ const INITIAL_STATE: AgentLinkState = {
   helpCardVisible: false,
   helpDismissed: false,
   headsUp: null,
+  runningApps: null,
+  linkLost: false,
+  startedSessionId: null,
+  lastEnded: null,
+  lastStartReaside: null,
 };
 
 function statusDetail(status: AgentConnectionStatus): string {
@@ -177,7 +235,9 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
       return {
         ...state,
         status: 'DISCONNECTED',
-        session: null,
+        // F-02: a session the agent is running survives a re-handshake; the UI keeps showing it
+        // with the "lost contact" warning until agent truth arrives.
+        linkLost: state.session !== null,
         connecting: true,
         helpCardVisible: false,
         detail: 'Looking for your Focus Agent…',
@@ -186,21 +246,26 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
       return {
         ...state,
         status: 'DISCONNECTED',
-        session: null,
+        linkLost: state.session !== null,
         connecting: true,
         helpCardVisible: false,
         helpDismissed: false,
         detail: 'Looking for your Focus Agent…',
       };
-    case 'status':
+    case 'status': {
+      const keepsSession =
+        state.session !== null &&
+        (action.status === 'FOCUSING' || action.status === 'DISCONNECTED');
       return {
         ...state,
         status: action.status,
         detail: action.detail,
         connecting: false,
-        session: action.status === 'FOCUSING' ? state.session : null,
+        session: keepsSession ? state.session : null,
+        linkLost: action.status === 'DISCONNECTED' ? state.session !== null : false,
         helpCardVisible: action.status === 'DISCONNECTED' ? state.helpCardVisible : false,
       };
+    }
     case 'hello':
       return {
         ...state,
@@ -220,6 +285,7 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
         status: 'IDLE',
         connecting: false,
         session: null,
+        linkLost: false,
         detail: 'Your Focus Agent rejected this dashboard. Pair it again on Devices to reconnect.',
       };
     case 'state': {
@@ -230,8 +296,11 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
         session: sessionFromState(action.message),
         detail: statusDetail(status),
         connecting: false,
+        linkLost: false,
       };
     }
+    case 'apps':
+      return { ...state, runningApps: action.message.apps };
     case 'focusStarted':
       return {
         ...state,
@@ -239,13 +308,24 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
         session: sessionFromStarted(action.message),
         detail: statusDetail('FOCUSING'),
         connecting: false,
+        linkLost: false,
+        startedSessionId: action.message.sessionId,
+        lastEnded: null,
       };
     case 'focusEnded':
       return {
         ...state,
         status: 'PAIRED',
         session: null,
+        linkLost: false,
+        startedSessionId: null,
         detail: 'The focus session ended and your windows are back.',
+        lastEnded: {
+          sessionId: action.message.sessionId,
+          at: action.message.at,
+          reason: action.message.reason,
+          actualMinutes: action.message.actualMinutes,
+        },
       };
     case 'headsUp':
       return {
@@ -261,7 +341,7 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
         ...state,
         status: 'DISCONNECTED',
         connecting: false,
-        session: null,
+        linkLost: state.session !== null,
         helpCardVisible: !state.helpDismissed,
         detail: 'We could not reach your Focus Agent. Make sure it is running.',
       };
@@ -269,6 +349,10 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
       return { ...state, helpCardVisible: true, helpDismissed: false };
     case 'dismissHelp':
       return { ...state, helpCardVisible: false, helpDismissed: true };
+    case 'startRequested':
+      return { ...state, lastStartReaside: action.reaside };
+    case 'dismissEnded':
+      return { ...state, lastEnded: null };
     case 'reset':
       return INITIAL_STATE;
     default:
@@ -323,8 +407,9 @@ export function AgentLinkProvider({
       link.on('authOk', () => dispatch({ type: 'authOk' })),
       link.on('authError', (message) => dispatch({ type: 'authError', message })),
       link.on('state', (message) => dispatch({ type: 'state', message })),
+      link.on('apps', (message) => dispatch({ type: 'apps', message })),
       link.on('focusStarted', (message) => dispatch({ type: 'focusStarted', message })),
-      link.on('focusEnded', () => dispatch({ type: 'focusEnded' })),
+      link.on('focusEnded', (message) => dispatch({ type: 'focusEnded', message })),
       link.on('scheduleHeadsUp', (message) => dispatch({ type: 'headsUp', message })),
       link.on('focusRejected', (message) => {
         toast.error(FOCUS_REJECTED_MESSAGES[message.code]);
@@ -367,9 +452,33 @@ export function AgentLinkProvider({
     linkRef.current?.notifyPaired();
   }, []);
 
-  const endFocus = useCallback((): void => {
-    linkRef.current?.endFocus(state.session?.sessionId);
+  const endFocus = useCallback((): boolean => {
+    return linkRef.current?.endFocus(state.session?.sessionId) ?? false;
   }, [state.session]);
+
+  const startFocus = useCallback((request: StartFocusRequest): boolean => {
+    const link = linkRef.current;
+    if (link === null) return false;
+    const sent = link.send({
+      type: 'enterFocus',
+      durationMin: request.durationMin,
+      allowList: [...request.allowList],
+      reaside: request.reaside,
+      // FR-009: the consent record is created here, only after the modal was confirmed.
+      consent: { acceptedAt: new Date().toISOString(), version: CONSENT_VERSION },
+      clientSessionId: request.clientSessionId,
+    });
+    if (sent) dispatch({ type: 'startRequested', reaside: request.reaside });
+    return sent;
+  }, []);
+
+  const requestRunningApps = useCallback((): void => {
+    linkRef.current?.requestApps();
+  }, []);
+
+  const dismissEndedSession = useCallback((): void => {
+    dispatch({ type: 'dismissEnded' });
+  }, []);
 
   const value = useMemo<AgentLinkContextValue>(
     () => ({
@@ -381,12 +490,20 @@ export function AgentLinkProvider({
       connecting: state.connecting,
       helpCardVisible: state.helpCardVisible,
       headsUp: state.headsUp,
+      runningApps: state.runningApps,
+      linkLost: state.linkLost,
+      startedSessionId: state.startedSessionId,
+      lastEnded: state.lastEnded,
+      lastStartReaside: state.lastStartReaside,
       connect,
       refresh,
       showHelpCard,
       dismissHelpCard,
       notifyPaired,
       endFocus,
+      startFocus,
+      requestRunningApps,
+      dismissEndedSession,
     }),
     [
       state.status,
@@ -397,12 +514,20 @@ export function AgentLinkProvider({
       state.connecting,
       state.helpCardVisible,
       state.headsUp,
+      state.runningApps,
+      state.linkLost,
+      state.startedSessionId,
+      state.lastEnded,
+      state.lastStartReaside,
       connect,
       refresh,
       showHelpCard,
       dismissHelpCard,
       notifyPaired,
       endFocus,
+      startFocus,
+      requestRunningApps,
+      dismissEndedSession,
     ],
   );
 
