@@ -1,7 +1,8 @@
-// server/src/server.ts — process bootstrap: MongoDB connection, HTTP listen, graceful shutdown
-// (T-010, TECHNICAL_DESIGN §8). Why: keeping this separate from app.ts means tests never bind a
-// port or need a real database, while production gets one ordered startup: validate env (import of
-// config/env) → connect Mongo → listen → handle SIGINT/SIGTERM by closing HTTP then the DB.
+// server/src/server.ts — process bootstrap: MongoDB connection, HTTP listen, agent-link hub,
+// graceful shutdown (T-010/T-041, TECHNICAL_DESIGN §8). Why: keeping this separate from app.ts means
+// tests never bind a port or need a real database, while production gets one ordered startup:
+// validate env (import of config/env) → connect Mongo → listen → attach the agent-link WebSocket
+// hub → handle SIGINT/SIGTERM by closing the hub, then HTTP, then the DB.
 // Invariants: fails fast and exits non-zero when Mongo is unreachable; a second signal or a hung
 // close cannot leave the process stuck forever (10 s force-exit); connection strings are never
 // logged with credentials (NFR-016).
@@ -11,11 +12,12 @@ import mongoose from 'mongoose';
 import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
+import { AGENT_LINK_PATH, attachAgentHub, closeAgentHub } from './realtime/agentHub.js';
 
 export interface RunningServer {
   /** Port actually bound (useful for tests/scripts that pass PORT=0). */
   port: number;
-  /** Close the HTTP server and the Mongo connection; safe to call once. */
+  /** Close the hub, the HTTP server and the Mongo connection; safe to call once. */
   stop: () => Promise<void>;
 }
 
@@ -46,10 +48,21 @@ export async function startServer(): Promise<RunningServer> {
   });
   logger.info({ port }, 'Focus Mode API listening');
 
+  // The hub shares this HTTP server and claims only `/agent-link` (plus the `/api/v1/agent-link`
+  // spelling the agent derives from its API base, DEC-013). Its sweeper starts inside attach.
+  attachAgentHub(httpServer);
+  logger.info({ path: AGENT_LINK_PATH }, 'agent-link WebSocket hub attached');
+
   let stopPromise: Promise<void> | null = null;
   const stop = (): Promise<void> => {
     stopPromise ??= (async () => {
-      logger.info('closing HTTP server and MongoDB connection');
+      logger.info('closing agent-link hub, HTTP server and MongoDB connection');
+      // Presence writes and socket termination finish before the driver disconnects.
+      try {
+        await closeAgentHub();
+      } catch (error) {
+        logger.error({ err: error }, 'agent-link hub close failed');
+      }
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
       });

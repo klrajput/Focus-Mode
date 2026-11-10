@@ -1,35 +1,95 @@
-// server/src/middlewares/rateLimit.ts — per-IP auth rate limiting (SEC-4, T-012).
-// Why: login/register are the only unauthenticated endpoints that touch passwords, so 10 attempts
-// per 15 minutes per IP bounds online guessing. The handler throws the shared RATE_LIMITED AppError
-// so the 429 keeps the standard `{success:false,error:{code,message}}` envelope (INTEGRATION
-// CONTRACTS §1.9) instead of express-rate-limit's plain-text default.
-// Invariants: in-memory store (single API instance, per TECHNICAL_DESIGN §8); the limit value comes
-// from env (RATE_LIMIT_AUTH_MAX, default 10) and tests build an app with an explicit lower limit so
-// the 429 path is exercised deterministically.
+// server/src/middlewares/rateLimit.ts — per-IP / per-user limits on the credential-bearing routes
+// (SEC-4, T-012/T-040/T-043). Why: rate limits are the only online-guessing defence for passwords,
+// pairing codes and enrollment secrets, so each contract limit lives here next to the route that
+// uses it. The handler throws the shared RATE_LIMITED AppError so a 429 keeps the standard
+// `{success:false,error:{code,message}}` envelope (INTEGRATION_CONTRACTS §1.9) instead of the
+// library's plain-text default; the message never reveals whether a code/account exists.
+// Invariants: limits are the frozen contract values — auth 10/15 min/IP, /agent/register 5/min/IP,
+// /devices/pair 10/min/user, /devices/:id/attest 30/min/user; in-memory store = single API instance
+// (TECHNICAL_DESIGN §8); tests build a fresh app per test so stores are per-test deterministic.
 //
-// NOTE: in-process limiter — scaling to multiple API instances would need a shared store.
-// Deployment note: behind a reverse proxy (Render/Railway) Express must trust exactly one proxy
-// hop (`app.set('trust proxy', 1)`) for req.ip to be the client address; the deployment task (W8)
-// sets that when the hosting topology is confirmed (BL-07) so per-IP limits stay correct.
+// Deployment note: behind a reverse proxy (Render/Railway) Express must trust exactly one proxy hop
+// (`app.set('trust proxy', 1)`) for req.ip to be the client address; the deployment task (W8) sets
+// that when the hosting topology is confirmed (BL-07) so per-IP limits stay correct.
 
 import type { RequestHandler } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { ERROR_CODES } from '@focus-mode/shared';
 import { AppError } from '../utils/AppError.js';
 
-/** SEC-4: 10 requests / 15 min / IP. */
-const AUTH_WINDOW_MS = 15 * 60 * 1000;
-const RATE_LIMITED_MESSAGE = 'Too many authentication attempts. Please try again in 15 minutes.';
+const MINUTE_MS = 60 * 1000;
+/** SEC-4: 10 auth requests / 15 min / IP. */
+const AUTH_WINDOW_MS = 15 * MINUTE_MS;
+const AUTH_LIMITED_MESSAGE = 'Too many authentication attempts. Please try again in 15 minutes.';
 
-export function createAuthRateLimiter(limit: number): RequestHandler {
+interface LimiterOptions {
+  windowMs: number;
+  limit: number;
+  identifier: string;
+  message: string;
+  /** `user`: key by authenticated user id (must be mounted after requireAuth); `ip`: default. */
+  keyBy: 'ip' | 'user';
+}
+
+function createLimiter(options: LimiterOptions): RequestHandler {
   return rateLimit({
-    windowMs: AUTH_WINDOW_MS,
-    limit,
+    windowMs: options.windowMs,
+    limit: options.limit,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    identifier: 'auth',
+    identifier: options.identifier,
+    ...(options.keyBy === 'user'
+      ? {
+          // Authenticated routes only: requireAuth has already attached `req.user`.
+          keyGenerator: (req): string => req.user?.id ?? ipKeyGenerator(req.ip ?? ''),
+        }
+      : {}),
     handler: (_req, _res, next) => {
-      next(new AppError(ERROR_CODES.RATE_LIMITED, RATE_LIMITED_MESSAGE));
+      next(new AppError(ERROR_CODES.RATE_LIMITED, options.message));
     },
+  });
+}
+
+/** SEC-4: `/auth/login`, `/auth/register` — limit configurable for tests (env RATE_LIMIT_AUTH_MAX). */
+export function createAuthRateLimiter(limit: number): RequestHandler {
+  return createLimiter({
+    windowMs: AUTH_WINDOW_MS,
+    limit,
+    identifier: 'auth',
+    message: AUTH_LIMITED_MESSAGE,
+    keyBy: 'ip',
+  });
+}
+
+/** SEC-4/§1.9: `POST /agent/register` — 5/min/IP. */
+export function createAgentRegisterRateLimiter(): RequestHandler {
+  return createLimiter({
+    windowMs: MINUTE_MS,
+    limit: 5,
+    identifier: 'agent-register',
+    message: 'Too many pairing registrations from this address. Please try again in a minute.',
+    keyBy: 'ip',
+  });
+}
+
+/** SEC-4/§1.9: `POST /devices/pair` — 10/min/user. */
+export function createDevicePairRateLimiter(): RequestHandler {
+  return createLimiter({
+    windowMs: MINUTE_MS,
+    limit: 10,
+    identifier: 'device-pair',
+    message: 'Too many pairing attempts. Please try again in a minute.',
+    keyBy: 'user',
+  });
+}
+
+/** SEC-4/§1.9: `POST /devices/:id/attest` — 30/min/user. */
+export function createDeviceAttestRateLimiter(): RequestHandler {
+  return createLimiter({
+    windowMs: MINUTE_MS,
+    limit: 30,
+    identifier: 'device-attest',
+    message: 'Too many attestation requests. Please try again in a minute.',
+    keyBy: 'user',
   });
 }

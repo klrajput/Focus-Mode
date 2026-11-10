@@ -6,7 +6,7 @@
 // Invariants: missing/garbled/expired token → 401 UNAUTHENTICATED; inactive user → 403
 // ACCOUNT_DISABLED (contract §1.2); the DB role is authoritative, never the token claim.
 
-import type { RequestHandler } from 'express';
+import type { Request, RequestHandler } from 'express';
 import { ERROR_CODES, type Role } from '@focus-mode/shared';
 import { User } from '../models/User.js';
 import { toSafeUser, type PublicUser } from '../services/user.service.js';
@@ -44,6 +44,14 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
   req.user = publicUser;
   next();
 };
+
+/** Narrow `req.user` for handlers mounted after `requireAuth` (defensive 401 otherwise). */
+export function getAuthenticatedUser(req: Request): PublicUser {
+  if (!req.user) {
+    throw new AppError(ERROR_CODES.UNAUTHENTICATED, 'Authentication required.');
+  }
+  return req.user;
+}
 
 /** 403 unless `req.user.role` is one of `roles` (must be mounted after `requireAuth`). */
 export function requireRole(...roles: readonly Role[]): RequestHandler {

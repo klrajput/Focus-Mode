@@ -6,7 +6,7 @@
 // written back to `req.body`, so controllers work on trimmed/lower-cased data and never re-parse;
 // Express 5 makes `req.query` read-only, so query validation stores its result on `res.locals`.
 
-import type { RequestHandler } from 'express';
+import type { RequestHandler, Response } from 'express';
 import { type z, ZodError } from 'zod';
 import { ERROR_CODES, type ValidationIssue } from '@focus-mode/shared';
 import { AppError } from '../utils/AppError.js';
@@ -70,4 +70,9 @@ export function validateQuery(schema: z.ZodType): RequestHandler {
     res.locals.validatedQuery = result.data;
     next();
   };
+}
+
+/** Read the parsed query written by `validateQuery` (typed at the call site). */
+export function getValidatedQuery<T>(res: Response): T {
+  return res.locals.validatedQuery as T;
 }
