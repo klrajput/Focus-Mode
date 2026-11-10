@@ -173,3 +173,16 @@
 - **Exception 1 (honest skip):** the missed-run **E2E** self-gates until `GET /api/v1/notifications` is merged in W5 (T-075). The MISSED path itself is implemented and covered by `server/src/test/{scheduler,reaper,schedule-run}.test.ts`; no REST surface exists yet to assert the notification from Playwright.
 - **Exception 2 (NEEDS-HUMAN / KI-013):** native tray menu clicks and OS notification visuals cannot be driven/read by Playwright `_electron`; the equivalent controller path is covered by the agent-window End Focus E2E, but the literal tray click + banner appearance remain on the Phase-8 checklist.
 - **Bonus (W8 evidence landed early):** release workflow dispatch `42858934575` produced **real unsigned installers** for Windows (NSIS + portable), macOS arm64/x64 (dmg + zip) and Linux (AppImage + deb) via native GitHub runners, with **4/4 `AGENT_SMOKE` jobs green** and **zero GitHub Releases created** (tag-only guard intact). Signing/notarisation, tag publishing and installer-level launch remain NEEDS-HUMAN/unverified and are documented in `docs/RELEASING.md`.
+
+## DEC-023 — W4/W5 UX review ratifications and fix routing (A3 §13)
+- **Date:** 2026-11-11 · **Status:** accepted · **Owner:** A0 (review by A3)
+- **Ratifications (R1–R7, spec amended by A3 in `docs/UX_SPEC.md` §5/§13):**
+  - **R1:** the "first focus on this device" consent sentence is agent-side only in v1 — the dashboard cannot read agent-local consent state (no contract field, and faking it after the first session would be dishonest); the native REC-004 dialog remains the gate. Ratified.
+  - **R2:** consent modal title stays `Start a {duration}-minute focus session?` (E2E-locked by A8's focus spec). Ratified.
+  - **R3:** `/focus` "Stays open" shows the fixed protected categories + allow-listed app labels (no stepped-aside count because the frozen contract exposes no such field — honest omission). Ratified.
+  - **R4:** W4 operational copy additions (schedule next-run line, timezone labels, per-widget retry) are acceptable. Ratified.
+  - **R5:** streak display lives on `/insights`, not `/dashboard` (dashboard keeps Today/next/recent). Ratified.
+  - **R6:** new notification UI copy ("No notifications yet.", unread count wording) approved. Ratified.
+  - **R7:** countdown ring stroke is viewBox-scaled (responsive) rather than a fixed px token. Ratified.
+- **Fixes routed:** **F-101 (MED, safety-adjacent)** — StartFocusCard must not send `enterFocus` while the allow-list query is pending/failed (would send `userApps: []` and tell the user "none yet" when the truth is "unknown") → **A4, before the W5 gate**; F-102…F-109/F-111/F-113 copy/a11y fixes → A4 next wave; **F-110** (no NFR-006 Playwright viewport `scrollWidth` spec exists) → A8 (W5/W7 E2E); F-112 re-review W5 pages after merge → A3 at the W6 gate.
+- **Consequences:** W5 gate requires F-101 fixed + W5 pages reviewed; F-110 is an explicit W7 test requirement; the review's PENDING rows are re-checked after the W5 merge (not treated as passes).
