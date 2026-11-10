@@ -1,3 +1,104 @@
-/* T-001 placeholder — global Tailwind 4 stylesheet, replaced by A3/A4 design tokens in W1. */
-/* It exists so the Vite build resolves Tailwind before the real theme is written. */
+/*
+ * Focus Mode global stylesheet — Tailwind 4 entry plus the design tokens from UX_SPEC §1.4.
+ * Every colour is a CSS variable so no component hard-codes a hex (UX_SPEC §1.5, T-084 gate).
+ * `tokens.css` holds the provisional non-colour tokens; A3 owns both files long-term.
+ */
+
 @import 'tailwindcss';
+@import './styles/tokens.css';
+
+@theme {
+  /* PDF §14 raw palette */
+  --color-base: #1e1b4b;
+  --color-surface: #f8fafc;
+  --color-primary: #4f46e5;
+  --color-focus: #0d9488;
+  --color-amber: #d97706;
+  --color-danger: #dc2626;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+
+  /* surfaces / structure */
+  --color-card: #ffffff;
+  --color-table-header: #f1f5f9;
+  --color-skeleton: #e2e8f0;
+  --color-toast: #0f172a;
+  --color-border: #e2e8f0;
+  --color-border-strong: #64748b;
+
+  /* primary family */
+  --color-primary-hover: #4338ca;
+  --color-primary-active: #3730a3;
+  --color-primary-subtle: #eef2ff;
+
+  /* focus (teal) family — graphics on Base, text/fill on light */
+  --color-focus-strong: #0f766e;
+  --color-focus-strong-hover: #115e59;
+  --color-focus-subtle: #f0fdfa;
+  --color-focus-on-base: #2dd4bf;
+
+  /* semantic text */
+  --color-danger-text: #b91c1c;
+  --color-danger-hover: #b91c1c;
+  --color-danger-subtle: #fef2f2;
+  --color-success-text: #166534;
+  --color-success-fill: #15803d;
+  --color-success-subtle: #f0fdf4;
+  --color-amber-text: #92400e;
+  --color-amber-strong: #b45309;
+  --color-amber-subtle: #fffbeb;
+
+  /* on dark (Base) */
+  --color-text-on-base-muted: #c7d2fe;
+  --color-link-on-base: #a5b4fc;
+  --color-danger-on-base: #f87171;
+  --color-nav-active-bg: #312e81;
+
+  /* disabled + rings */
+  --color-disabled-fill: #e2e8f0;
+  --color-disabled-text: #475569;
+  --color-ring: #4f46e5;
+  --color-ring-on-base: #a5b4fc;
+  --color-ring-track: #6366f1;
+
+  /* badges: fill (sanctioned label colour in comment) */
+  --color-badge-success-bg: #dcfce7; /* label success-text #166534 */
+  --color-badge-neutral-bg: #e2e8f0; /* label #475569 */
+  --color-badge-focus-bg: #ccfbf1; /* label #115E59 */
+  --color-badge-amber-bg: #fef3c7; /* label amber-text #92400E */
+  --color-badge-danger-bg: #fee2e2; /* label #991B1B */
+  --color-badge-info-bg: #e0e7ff; /* label #3730A3 */
+
+  /* type + shape + elevation + easing */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-pill: 9999px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 16px rgb(15 23 42 / 0.06);
+  --shadow-modal: 0 12px 40px rgb(15 23 42 / 0.18);
+  --ease-calm: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}

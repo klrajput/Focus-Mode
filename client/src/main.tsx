@@ -1,29 +1,19 @@
-// T-001 placeholder — React entry point proving Vite 8 + React 19 + Tailwind 4 build.
-// Owner A4 replaces this file with the router / AppShell / provider tree in W1.
+/*
+ * React entry point for the Focus Mode dashboard (T-020).
+ * Mounts the provider/router tree from `app/app.tsx`; the only thing it owns is the #root lookup
+ * and StrictMode. All configuration (API base, tokens) lives in modules under `src/api`.
+ */
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
-
-function App() {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[#1E1B4B] p-8 text-center text-[#F8FAFC]">
-      <h1 className="text-3xl font-semibold tracking-tight">Focus Mode — scaffold</h1>
-      <p className="max-w-md text-sm text-slate-300">
-        T-001 placeholder dashboard. The real pages, router and agent link provider land in W1.
-      </p>
-      <span className="rounded-full bg-[#0D9488] px-3 py-1 text-xs font-medium text-white">
-        scaffold ok
-      </span>
-    </main>
-  );
-}
+import { App } from './app/app';
 
 const rootElement = document.getElementById('root');
 
 if (rootElement === null) {
-  throw new Error('Focus Mode scaffold: #root element is missing from index.html');
+  throw new Error('Focus Mode: #root element is missing from index.html');
 }
 
 createRoot(rootElement).render(
