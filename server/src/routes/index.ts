@@ -6,6 +6,7 @@
 // tune middleware (e.g. the auth rate-limit threshold); router order has no overlap between paths.
 
 import { Router } from 'express';
+import { createAdminRouter } from './admin.routes.js';
 import { createAgentRouter } from './agent.routes.js';
 import { createAgentLinksRouter } from './agent-links.routes.js';
 import { createAllowlistRouter } from './allowlist.routes.js';
@@ -37,9 +38,8 @@ export function createApiRouter(options: ApiRouterOptions): Router {
   router.use('/users', createUsersRouter({ passwordRateLimitMax: options.authRateLimitMax }));
   router.use('/agent-links', createAgentLinksRouter());
 
-  // NOTE: the W5 admin router (`/api/v1/admin/*`, T-073/T-074) is owned by a parallel worker.
-  // When `routes/admin.routes.ts` lands, A0 only needs: `router.use('/admin', createAdminRouter());`
-  // here (no other file changes).
+  // T-073/T-074 admin APIs (A5B W5 worker; mounted here by A0 at merge as agreed in the task handoff).
+  router.use('/admin', createAdminRouter());
 
   return router;
 }
