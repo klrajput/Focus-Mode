@@ -147,6 +147,24 @@ describe('AdminPage tabs', () => {
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
   });
 
+  it('uses filter copy only when a search is applied (F-108)', async () => {
+    const user = userEvent.setup();
+    installFetch((url) => {
+      if (!url.includes('/admin/users')) throw new Error(`unexpected request: ${url}`);
+      return fakeResponse(pageOf([]));
+    });
+
+    renderAdmin();
+
+    expect(await screen.findByText('No users yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No users match your filters.')).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^Search users/), 'nobody');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('No users match your filters.')).toBeInTheDocument();
+  });
+
   it('searches by name or email and keeps the query server-side', async () => {
     const user = userEvent.setup();
     const fetchMock = installFetch((url) => {

@@ -69,13 +69,20 @@ function valuesFrom(schedule: Schedule | undefined): ScheduleFormValues {
 
 /** Friendly wrapper around the shared schema's technical zod messages (rules stay shared). */
 function displayError(
-  field: 'name' | 'durationMin',
+  field: 'name' | 'startTime' | 'durationMin',
   error: { message?: string; type?: string } | undefined,
 ): string | undefined {
   if (error === undefined) return undefined;
-  return field === 'name'
-    ? 'Enter a name between 2 and 60 characters.'
-    : 'Enter a whole number of minutes between 1 and 480.';
+  switch (field) {
+    case 'name':
+      return 'Enter a name between 2 and 60 characters.';
+    case 'startTime':
+      // UX_SPEC §13.4 F-102: the shared schema's raw "startTime must be 24-hour HH:mm" leaks a
+      // field name. The rule stays shared; only the rendered sentence becomes user copy.
+      return 'Use 24-hour HH:mm, for example 09:00.';
+    case 'durationMin':
+      return 'Enter a whole number of minutes between 1 and 480.';
+  }
 }
 
 export interface ScheduleDialogProps {
@@ -190,7 +197,7 @@ export function ScheduleDialog({ open, schedule, onClose, onSubmit, busy }: Sche
             placeholder="09:00"
             inputMode="numeric"
             autoComplete="off"
-            error={errors.startTime?.message}
+            error={displayError('startTime', errors.startTime)}
           />
           <Input
             {...form.register('durationMin', { valueAsNumber: true })}

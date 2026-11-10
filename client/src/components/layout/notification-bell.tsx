@@ -5,7 +5,7 @@
  * Empty, loading, error and success states are explicit; no count is ever invented while loading.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Bell, BellRing, CheckCheck } from 'lucide-react';
 
 import type { NotificationItem } from '../../api/types';
@@ -66,12 +66,32 @@ export function NotificationBell() {
   const markRead = useMarkNotificationRead();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  /** F-109: closing with Escape (or the bell itself) returns focus to the bell, never nowhere. */
+  function closeAndReturnFocus(): void {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
 
   useEffect(() => {
     if (!open) return;
 
+    // F-109 (T-084): `role="dialog"` promises that focus enters the panel on open. The panel is
+    // not modal (no overlay), so it is only focus-trapped while the user is inside it.
+    const panel = panelRef.current;
+    const focusables = (): HTMLElement[] =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+    (focusables()[0] ?? panel)?.focus();
+
     function handlePointerDown(event: MouseEvent): void {
       if (containerRef.current?.contains(event.target as Node) === true) return;
+      // A click outside is the user choosing another control; do not pull focus back to the bell.
       setOpen(false);
     }
 
@@ -90,9 +110,36 @@ export function NotificationBell() {
     markRead.mutate(item.id);
   }
 
+  function onPanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeAndReturnFocus();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const focusables = Array.from(
+      panelRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (first === undefined || last === undefined) return;
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <div ref={containerRef} className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -104,7 +151,7 @@ export function NotificationBell() {
           if (next) void notificationsQuery.refetch();
         }}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') setOpen(false);
+          if (event.key === 'Escape') closeAndReturnFocus();
         }}
         className="relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-control)] text-ink hover:bg-primary-subtle focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none"
       >
@@ -125,13 +172,13 @@ export function NotificationBell() {
 
       {open ? (
         <div
+          ref={panelRef}
           id="notifications-panel"
           role="dialog"
           aria-label="Notifications"
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') setOpen(false);
-          }}
-          className="absolute right-0 z-[var(--fm-z-nav)] mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-[var(--radius-card)] border border-border bg-card shadow-[var(--shadow-modal)]"
+          tabIndex={-1}
+          onKeyDown={onPanelKeyDown}
+          className="absolute right-0 z-[var(--fm-z-nav)] mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-[var(--radius-card)] border border-border bg-card shadow-[var(--shadow-modal)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
             <p className="text-[13px] font-semibold text-ink">Notifications</p>

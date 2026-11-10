@@ -148,10 +148,17 @@ export function UsersTab() {
         ) : null}
 
         {usersQuery.isSuccess && users.length === 0 ? (
+          // F-108: the filter sentence is only true when a search is applied. With no search the
+          // honest empty state is "No users yet." — never tell an admin their filters matched
+          // nothing when they have not set any.
           <EmptyState
             icon={User}
-            title="No users match your filters."
-            description="Try a different name or email."
+            title={searching ? 'No users match your filters.' : 'No users yet.'}
+            description={
+              searching
+                ? 'Try a different name or email.'
+                : 'People who create an account will appear here.'
+            }
             className="border-0 p-0 shadow-none sm:p-0"
           />
         ) : null}

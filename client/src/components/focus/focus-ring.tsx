@@ -13,6 +13,16 @@ const VIEWBOX = 120;
 const RADIUS = 54;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
+/**
+ * F-104: stroke width lives in viewBox units, so it scales with the ring (R7). Each value is the
+ * §1.3 token expressed at the size that breakpoint renders: `--fm-ring-stroke-sm` 10 px at 220 px
+ * = 5.45 units, 11 px at 280 px = 4.71, `--fm-ring-stroke-lg` 12 px at 320 px = 4.5. A fixed 4
+ * units was ~7 px at 220 px, visibly thinner than the token. The class (CSS) wins over the
+ * presentation attribute, which is kept as the no-CSS fallback.
+ */
+const STROKE_CLASSES = '[stroke-width:5.45] sm:[stroke-width:4.71] lg:[stroke-width:4.5]';
+const STROKE_FALLBACK = 5.45;
+
 export interface FocusRingProps {
   remaining: number;
   /** Whole session length in seconds; drives the progress arc. */
@@ -37,7 +47,8 @@ export function FocusRing({ remaining, total, className }: FocusRingProps) {
           r={RADIUS}
           fill="none"
           stroke="var(--fm-ring-track-color)"
-          strokeWidth={4}
+          strokeWidth={STROKE_FALLBACK}
+          className={STROKE_CLASSES}
         />
         <circle
           cx={VIEWBOX / 2}
@@ -45,7 +56,8 @@ export function FocusRing({ remaining, total, className }: FocusRingProps) {
           r={RADIUS}
           fill="none"
           stroke="var(--fm-ring-progress-color)"
-          strokeWidth={4}
+          strokeWidth={STROKE_FALLBACK}
+          className={STROKE_CLASSES}
           strokeLinecap="round"
           strokeDasharray={CIRCUMFERENCE}
           strokeDashoffset={CIRCUMFERENCE * (1 - fraction)}

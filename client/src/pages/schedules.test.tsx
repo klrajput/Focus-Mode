@@ -300,9 +300,7 @@ describe('SchedulesPage — create and edit', () => {
     expect(
       within(dialog).getByText('Enter a name between 2 and 60 characters.'),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText('startTime must be 24-hour HH:mm, e.g. 09:00'),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText('Use 24-hour HH:mm, for example 09:00.')).toBeInTheDocument();
     expect(
       within(dialog).getByText('Enter a whole number of minutes between 1 and 480.'),
     ).toBeInTheDocument();

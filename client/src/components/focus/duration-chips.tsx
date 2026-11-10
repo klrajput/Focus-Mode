@@ -101,9 +101,12 @@ export function DurationChips({ value, onChange, disabled = false }: DurationChi
         <button
           type="button"
           aria-pressed={customOpen}
+          aria-expanded={customOpen}
           disabled={disabled}
           onClick={openCustom}
-          aria-controls={`${inputId}-custom`}
+          // T-084 (axe: aria-valid-attr-value): only point at the input while it is rendered;
+          // a dangling aria-controls target is a critical violation.
+          aria-controls={customOpen ? `${inputId}-custom` : undefined}
           className={cn(
             'inline-flex min-h-11 items-center rounded-[var(--radius-control)] border px-3 text-sm font-medium md:min-h-10',
             'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none',

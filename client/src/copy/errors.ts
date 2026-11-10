@@ -31,9 +31,9 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = Object.freeze
 
 /**
  * Login-form specific copy for a rejected credential pair (401 on `/auth/login`).
- * PROVISIONAL: UX_SPEC §6.2 only defines the session-expiry wording for 401, which would be
- * misleading on a login form. Requested as an A3 copy addition (see the A4 W1 report); the string
- * stays sentence-case, second-person and free of exclamation marks per §6.1.
+ * Ratified in UX_SPEC §12.4 D1: the generic 401 session-expiry wording would be misleading on a
+ * login form, so this sentence is the approved login-only string. It stays sentence-case,
+ * second-person and free of exclamation marks per §6.1.
  */
 export const LOGIN_REJECTED_COPY = 'Email or password is incorrect.';
 

@@ -178,6 +178,25 @@ describe('FocusPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('shows the stepped-aside count from the agent snapshot (F-103)', async () => {
+    installFetch();
+    renderPage({
+      runningApps: [
+        { key: 'chrome', label: 'Google Chrome', running: true },
+        { key: 'vscode', label: 'Visual Studio Code', running: true },
+        { key: 'slack', label: 'Slack', running: true },
+        { key: 'spotify', label: 'Spotify', running: false },
+      ],
+      lastStartReaside: true,
+    });
+
+    // Chrome is protected and VS Code is allow-listed, so only Slack stepped aside; Spotify was
+    // not running and is not counted.
+    expect(
+      await screen.findByText('1 app — minimised, not closed · re-aside: on'),
+    ).toBeInTheDocument();
+  });
+
   it('shows the honest empty state when no session is running', async () => {
     installFetch();
     renderPage({ status: 'PAIRED', session: null });
