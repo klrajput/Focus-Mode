@@ -12,6 +12,7 @@ import mongoose from 'mongoose';
 import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
+import { startCronJobs, stopCronJobs } from './cron/index.js';
 import { AGENT_LINK_PATH, attachAgentHub, closeAgentHub } from './realtime/agentHub.js';
 
 export interface RunningServer {
@@ -53,10 +54,18 @@ export async function startServer(): Promise<RunningServer> {
   attachAgentHub(httpServer);
   logger.info({ path: AGENT_LINK_PATH }, 'agent-link WebSocket hub attached');
 
+  // T-063/T-068: the scheduler needs live presence (hub) and the DB; stop it before they close.
+  startCronJobs();
+
   let stopPromise: Promise<void> | null = null;
   const stop = (): Promise<void> => {
     stopPromise ??= (async () => {
-      logger.info('closing agent-link hub, HTTP server and MongoDB connection');
+      logger.info('closing cron jobs, agent-link hub, HTTP server and MongoDB connection');
+      try {
+        await stopCronJobs();
+      } catch (error) {
+        logger.error({ err: error }, 'cron job shutdown failed');
+      }
       // Presence writes and socket termination finish before the driver disconnects.
       try {
         await closeAgentHub();

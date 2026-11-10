@@ -19,6 +19,7 @@ import {
   type SessionListQuery,
   type SessionPatchInput,
   type SessionStatus,
+  type TerminalSessionStatus,
 } from '@focus-mode/shared';
 import { Device } from '../models/Device.js';
 import { Session, type SessionDocument } from '../models/Session.js';
@@ -324,4 +325,61 @@ export async function getActiveSession(userId: string): Promise<PublicSession | 
     status: 'ACTIVE',
   }).sort({ startedAt: -1 });
   return session === null ? null : toPublicSession(session);
+}
+
+// ---------------------------------------------------------------------------
+// Agent cloud reporting (T-069 server half, REC-006 / FR-027)
+// ---------------------------------------------------------------------------
+
+/**
+ * The agent's `session.started` cloud report. It goes through the SAME service as the dashboard's
+ * `POST /sessions`, so a dashboard create + an agent report for one `clientSessionId` produce ONE
+ * session (idempotent), and an agent-only report (dashboard closed, FR-027) still persists it.
+ * Throws the same AppErrors as the REST path; the hub logs conflicts instead of closing the socket.
+ */
+export interface ReportedSessionStart {
+  deviceId: string;
+  clientSessionId: string;
+  startedAt: string;
+  plannedMinutes: number;
+  source: FocusSource;
+}
+
+export async function reportSessionStarted(
+  userId: string,
+  input: ReportedSessionStart,
+): Promise<CreateSessionResult> {
+  return createSession(userId, {
+    deviceId: input.deviceId,
+    durationMin: input.plannedMinutes,
+    startedAt: input.startedAt,
+    clientSessionId: input.clientSessionId,
+    source: input.source,
+  });
+}
+
+/** The agent's `session.ended` cloud report; null when no matching session exists (never fabricated). */
+export interface ReportedSessionEnd {
+  clientSessionId: string;
+  endedAt: string;
+  actualMinutes: number;
+  status: TerminalSessionStatus;
+  endReason: EndReason;
+}
+
+export async function reportSessionEnded(
+  userId: string,
+  input: ReportedSessionEnd,
+): Promise<PublicSession | null> {
+  const session = await Session.findOne({
+    userId: toObjectId(userId),
+    clientSessionId: input.clientSessionId,
+  }).select('_id');
+  if (session === null) return null;
+  return finaliseSession(userId, String(session._id), {
+    status: input.status,
+    endedAt: input.endedAt,
+    actualMinutes: input.actualMinutes,
+    endReason: input.endReason,
+  });
 }

@@ -1,16 +1,18 @@
-// server/src/realtime/agentHub.ts — the cloud ↔ Focus Agent WebSocket hub (T-041, TECHNICAL_DESIGN
-// §6.3/§8). Why: one authoritative place authenticates a device token on the `/agent-link` upgrade,
-// tracks live presence for the dashboard/scheduler, and keeps `Device.status`/`lastSeenAt` honest
-// from 15 s heartbeats (DISCONNECTED after 45 s of silence). The socket carries presence only — no
-// focus command ever originates here.
+// server/src/realtime/agentHub.ts — the cloud ↔ Focus Agent WebSocket hub (T-041 + W4 T-063/T-069,
+// TECHNICAL_DESIGN §6.3/§8). Why: one authoritative place authenticates a device token on the
+// `/agent-link` upgrade, tracks live presence for the dashboard/scheduler, keeps `Device.status`/
+// `lastSeenAt` honest from 15 s heartbeats, and routes the agent's cloud reports into the SAME
+// services the dashboard uses (REC-006/FR-027): session start/end upserts and the DEC-021
+// schedule-run confirm/cancel lifecycle. No focus command ever originates here.
 // Invariants: INV-2 — the private sender accepts only the `scheduleDue` | `revoked` union and every
 // frame is built through its frozen shared schema; INV-6 — the agent may only report
-// `{state, sessionId?}`, and unknown/strict-invalid frames close the socket. Tokens are handled as
+// `{state, sessionId?}`/session reports, and unknown/strict-invalid frames close the socket; a
+// domain conflict in a report is logged, never fatal (the socket stays open). Tokens are handled as
 // SHA-256 digests only and are never logged (SEC-6); a bad token upgrades and closes with the
 // contract code 4401 because the Focus Agent must tell "revoked" apart from a transient retry
 // (a pre-upgrade HTTP 401 would erase that distinction).
 
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
@@ -24,12 +26,19 @@ import {
   type HeartbeatMessage,
   type RevokedMessage,
   type ScheduleDueMessage,
+  type SessionEndedMessage,
+  type SessionStartedMessage,
+  type ScheduleRunCancelledMessage,
 } from '@focus-mode/shared';
 import { Types } from 'mongoose';
 import type { Logger } from 'pino';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { logger as defaultLogger } from '../config/logger.js';
 import { Device } from '../models/Device.js';
+import { cancelScheduleRun, markRunConfirmed } from '../services/schedule-run.service.js';
+import { reportSessionEnded, reportSessionStarted } from '../services/session.service.js';
+import { isAppError } from '../utils/AppError.js';
+import { hashDeviceToken } from '../utils/device-token.js';
 
 /** Path the Focus Agent appends to the API base (INTEGRATION_CONTRACTS §5.1). */
 export const AGENT_LINK_PATH = '/agent-link';
@@ -98,10 +107,8 @@ export interface AgentHubApi {
   close(): Promise<void>;
 }
 
-/** SHA-256 hex of a device bearer token — the only representation stored or compared (SEC-6). */
-export function hashDeviceToken(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex');
-}
+/** Re-exported for the hub's public API/tests; the implementation is shared with REST auth. */
+export { hashDeviceToken };
 
 /** Presence entries are keyed by canonical ObjectId hex (contract §1.3). */
 function deviceKey(deviceId: string): string {
@@ -441,17 +448,137 @@ class AgentHub implements AgentHubApi {
       return;
     }
 
-    if (message.type !== 'heartbeat') {
-      // session.started / session.ended belong to the reporting slice (T-045); this hub must not
-      // fake persistence, so they are surfaced to the logger and otherwise left untouched.
-      this.#logger.debug(
-        { deviceId: entry.deviceId, type: message.type },
-        'agent-link message type has no handler in this slice (T-045 owns session reporting)',
+    switch (message.type) {
+      case 'heartbeat':
+        await this.#applyHeartbeat(entry, message);
+        return;
+      case 'session.started':
+        await this.#applySessionStarted(entry, message);
+        return;
+      case 'session.ended':
+        await this.#applySessionEnded(entry, message);
+        return;
+      case 'scheduleRunCancelled':
+        await this.#applyScheduleRunCancelled(entry, message);
+        return;
+      default:
+        // Unreachable while the shared union is exhaustive; never guess at an unknown frame type.
+        this.#logger.debug(
+          { deviceId: entry.deviceId, type: String(message.type) },
+          'agent-link ignored an unhandled agent→cloud message',
+        );
+    }
+  }
+
+  /** Owner of the authenticated device; null when the row vanished (token reuse after unpair). */
+  async #deviceOwnerId(deviceId: string): Promise<string | null> {
+    const device = await Device.findById(deviceId).select('ownerId').lean();
+    return device?.ownerId ? String(device.ownerId) : null;
+  }
+
+  /**
+   * Domain errors (409/404/400) in a report are logged and swallowed: a stale/duplicate agent
+   * report must never drop a healthy presence socket. Unexpected errors still propagate.
+   */
+  #logReportFailure(entry: PresenceEntry, type: string, error: unknown): void {
+    if (isAppError(error) && error.status < 500) {
+      this.#logger.warn(
+        { deviceId: entry.deviceId, type, code: error.code },
+        'agent report rejected by the session service (kept the socket open)',
       );
       return;
     }
+    throw error;
+  }
 
-    await this.#applyHeartbeat(entry, message);
+  /** T-069: `session.started` upserts via the dashboard's session service (REC-006, FR-027). */
+  async #applySessionStarted(entry: PresenceEntry, message: SessionStartedMessage): Promise<void> {
+    const ownerId = await this.#deviceOwnerId(entry.deviceId);
+    if (ownerId === null) {
+      this.#logger.warn({ deviceId: entry.deviceId }, 'session report from an unowned device');
+      return;
+    }
+    try {
+      const { session, created } = await reportSessionStarted(ownerId, {
+        deviceId: entry.deviceId,
+        clientSessionId: message.clientSessionId,
+        startedAt: message.startedAt,
+        plannedMinutes: message.plannedMinutes,
+        source: message.source,
+      });
+      if (message.scheduleRunId !== undefined) {
+        const confirmed = await markRunConfirmed({
+          runId: message.scheduleRunId,
+          deviceId: entry.deviceId,
+          sessionId: session.id,
+        });
+        if (!confirmed) {
+          this.#logger.warn(
+            { deviceId: entry.deviceId, runId: message.scheduleRunId },
+            'schedule run could not be confirmed (already missed/cancelled or wrong device)',
+          );
+        }
+      }
+      this.#logger.info(
+        { deviceId: entry.deviceId, sessionId: session.id, created, source: message.source },
+        'agent reported session start',
+      );
+    } catch (error) {
+      this.#logReportFailure(entry, message.type, error);
+    }
+  }
+
+  /** T-069: `session.ended` finalises the same session; null = no matching report, never invented. */
+  async #applySessionEnded(entry: PresenceEntry, message: SessionEndedMessage): Promise<void> {
+    const ownerId = await this.#deviceOwnerId(entry.deviceId);
+    if (ownerId === null) {
+      this.#logger.warn({ deviceId: entry.deviceId }, 'session report from an unowned device');
+      return;
+    }
+    try {
+      const session = await reportSessionEnded(ownerId, {
+        clientSessionId: message.clientSessionId,
+        endedAt: message.endedAt,
+        actualMinutes: message.actualMinutes,
+        status: message.status,
+        endReason: message.endReason,
+      });
+      if (session === null) {
+        this.#logger.warn(
+          { deviceId: entry.deviceId, clientSessionId: message.clientSessionId },
+          'session.ended report has no matching session (ignored, nothing fabricated)',
+        );
+        return;
+      }
+      this.#logger.info(
+        { deviceId: entry.deviceId, sessionId: session.id, status: session.status },
+        'agent reported session end',
+      );
+    } catch (error) {
+      this.#logReportFailure(entry, message.type, error);
+    }
+  }
+
+  /** DEC-021 §3: the user cancelled the agent heads-up → the run becomes CANCELLED_BY_USER. */
+  async #applyScheduleRunCancelled(
+    entry: PresenceEntry,
+    message: ScheduleRunCancelledMessage,
+  ): Promise<void> {
+    const cancelled = await cancelScheduleRun({
+      runId: message.runId,
+      deviceId: entry.deviceId,
+    });
+    if (!cancelled) {
+      this.#logger.warn(
+        { deviceId: entry.deviceId, runId: message.runId },
+        'schedule-run cancel ignored (run not STARTED for this device)',
+      );
+      return;
+    }
+    this.#logger.info(
+      { deviceId: entry.deviceId, runId: message.runId, at: message.at },
+      'agent reported scheduled-run cancellation by the user',
+    );
   }
 
   /** REC-001 presence: state/sessionId live in memory, status/lastSeenAt in Mongo. */

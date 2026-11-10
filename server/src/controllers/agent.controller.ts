@@ -1,10 +1,11 @@
-// server/src/controllers/agent.controller.ts — agent-facing REST handlers (T-040/T-043).
+// server/src/controllers/agent.controller.ts — agent-facing REST handlers (T-040/T-043/T-063).
 // Why: the Focus Agent has no user JWT; it pre-registers a code digest, polls with its one-time
-// enroll secret for the device token, and fetches the attestation public key. Thin handlers only
-// translate validated input into service calls and shape the NFR-002 success envelope.
-// Invariants: 201 for register (contract §3.1 #37), 200 for poll/attest-key; the device token is
-// returned to the agent exactly once and never to a browser session; the private key never leaves
-// the server (only the public key is served here).
+// enroll secret for the device token, fetches the attestation public key, and (W4) fetches the
+// owner's allow-list before a scheduled start. Thin handlers only translate validated input into
+// service calls and shape the NFR-002 success envelope.
+// Invariants: 201 for register (contract §3.1 #37), 200 for poll/attest-key/allowlist; the device
+// token is returned to the agent exactly once and never to a browser session; the private key never
+// leaves the server; the allow-list is always the owner's full protected+user set (INV-3).
 
 import type { RequestHandler } from 'express';
 import {
@@ -12,6 +13,8 @@ import {
   type DeviceRegisterInput,
   type EnrollPollInput,
 } from '@focus-mode/shared';
+import { getAuthenticatedDevice } from '../middlewares/deviceAuth.js';
+import { getAllowlist, type PublicAllowlist } from '../services/allowlist.service.js';
 import {
   getAttestationPublicKey,
   type AttestationPublicKey,
@@ -51,4 +54,14 @@ export const attestKey: RequestHandler<RouteParams, ApiSuccess<AttestationPublic
   res,
 ) => {
   res.status(200).json({ success: true, data: getAttestationPublicKey() });
+};
+
+/** GET /api/v1/agent/allowlist — 200 owner allow-list for scheduled starts (C-20). */
+export const allowlist: RequestHandler<RouteParams, ApiSuccess<PublicAllowlist>> = async (
+  req,
+  res,
+) => {
+  const device = getAuthenticatedDevice(req);
+  const data = await getAllowlist(device.ownerId);
+  res.status(200).json({ success: true, data });
 };

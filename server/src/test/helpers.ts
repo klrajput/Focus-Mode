@@ -6,7 +6,7 @@
 // Invariants: tests use the production middleware stack (no stubs); each test starts from an empty
 // database; documents created in tests hold real bcrypt hashes (cost 12) like production.
 
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { Express } from 'express';
 import mongoose from 'mongoose';
@@ -14,9 +14,11 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 import { buildApp, type BuildAppOptions } from '../app.js';
 import { Allowlist } from '../models/Allowlist.js';
-import { Device } from '../models/Device.js';
-import { User } from '../models/User.js';
+import { Device, type DeviceDocument } from '../models/Device.js';
+import { Schedule, type ScheduleDocument } from '../models/Schedule.js';
+import { User, type UserDocument } from '../models/User.js';
 import { computePairingCodeHmac } from '../utils/crypto.js';
+import { hashDeviceToken } from '../utils/device-token.js';
 
 // KI-006 / DEC-013: point mongodb-memory-server at the workspace cache before it resolves a binary.
 if (process.env.MONGOMS_DOWNLOAD_DIR === undefined) {
@@ -172,4 +174,72 @@ export async function markDeviceConnected(deviceId: string): Promise<void> {
     { _id: deviceId },
     { $set: { status: 'CONNECTED', lastSeenAt: new Date() } },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Direct model fixtures (W4 cron/reaper/agent-allowlist tests): real documents, no HTTP detours.
+// ---------------------------------------------------------------------------
+
+/** A real bcrypt cost-12 hash of a throwaway test password (fixtures never log in with it). */
+export const TEST_PASSWORD_HASH = '$2b$12$d/MOKOhWHuKkrgXN4VZzvuUzfzmjJeA5889BJtg3YrY3V2MQq1s7.';
+
+/** Create a user document directly (unique email unless overridden), for cron/reaper fixtures. */
+export async function createDirectUser(
+  overrides: Partial<{
+    email: string;
+    name: string;
+    role: 'USER' | 'ADMIN';
+    timezone: string;
+    isActive: boolean;
+  }> = {},
+): Promise<UserDocument> {
+  return User.create({
+    name: overrides.name ?? 'Test User',
+    email: overrides.email ?? `user-${randomUUID()}@demo.com`,
+    passwordHash: TEST_PASSWORD_HASH,
+    role: overrides.role ?? 'USER',
+    timezone: overrides.timezone ?? 'UTC',
+    isActive: overrides.isActive ?? true,
+  });
+}
+
+/** Create a paired device document directly, returning its plaintext token for ws/HTTP auth. */
+export async function createTestDevice(overrides: {
+  ownerId: mongoose.Types.ObjectId;
+  name?: string;
+  status?: 'CONNECTED' | 'DISCONNECTED' | 'FOCUSING';
+  token?: string;
+}): Promise<{ device: DeviceDocument; deviceId: string; token: string }> {
+  const token = overrides.token ?? `device-token-${randomUUID()}`;
+  const device = await Device.create({
+    ownerId: overrides.ownerId,
+    name: overrides.name ?? 'Test Mac',
+    os: 'macOS',
+    pairedAt: new Date(),
+    lastSeenAt: null,
+    status: overrides.status ?? 'DISCONNECTED',
+    deviceTokenHash: hashDeviceToken(token),
+    agentVersion: '1.4.0',
+  });
+  return { device, deviceId: String(device._id), token };
+}
+
+/** Create a schedule document directly (cron tests) — no HTTP validation detour. */
+export async function createTestSchedule(overrides: {
+  userId: mongoose.Types.ObjectId;
+  days: number[];
+  startTime: string;
+  durationMin?: number;
+  enabled?: boolean;
+  name?: string;
+}): Promise<ScheduleDocument> {
+  return Schedule.create({
+    userId: overrides.userId,
+    name: overrides.name ?? 'Test schedule',
+    days: overrides.days,
+    startTime: overrides.startTime,
+    durationMin: overrides.durationMin ?? 25,
+    enabled: overrides.enabled ?? true,
+    lastRunAt: null,
+  });
 }

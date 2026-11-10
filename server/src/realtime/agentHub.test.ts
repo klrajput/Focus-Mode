@@ -22,6 +22,9 @@ import {
 import { Types } from 'mongoose';
 import { WebSocket, type RawData } from 'ws';
 import { Device, type DeviceDocument } from '../models/Device.js';
+import { ScheduleRun } from '../models/ScheduleRun.js';
+import { Session } from '../models/Session.js';
+import { createSession } from '../services/session.service.js';
 import { clearTestDatabase, startTestDatabase, stopTestDatabase } from '../test/helpers.js';
 import {
   AGENT_LINK_CONTRACT_PATH,
@@ -158,12 +161,19 @@ function openAgentSocket(
   return { socket, closed };
 }
 
+interface CreatedDevice {
+  deviceId: string;
+  token: string;
+  ownerId: Types.ObjectId;
+}
+
 async function createDevice(
-  overrides: { token?: string; status?: DeviceStatus } = {},
-): Promise<{ deviceId: string; token: string }> {
+  overrides: { token?: string; status?: DeviceStatus; ownerId?: Types.ObjectId } = {},
+): Promise<CreatedDevice> {
   const token = overrides.token ?? `device-token-${randomUUID()}`;
+  const ownerId = overrides.ownerId ?? new Types.ObjectId();
   const device = await Device.create({
-    ownerId: new Types.ObjectId(),
+    ownerId,
     name: 'Test Mac',
     os: 'macOS',
     pairedAt: new Date('2026-11-10T10:00:00.000Z'),
@@ -172,7 +182,7 @@ async function createDevice(
     deviceTokenHash: hashDeviceToken(token),
     agentVersion: '0.1.0',
   });
-  return { deviceId: String(device._id), token };
+  return { deviceId: String(device._id), token, ownerId };
 }
 
 async function readDevice(deviceId: string): Promise<DeviceDocument> {
@@ -494,5 +504,280 @@ describe('presence teardown', () => {
     expect((beats.length - 1) * gapMs).toBeGreaterThan(1_000);
     expect(isDeviceConnected(deviceId)).toBe(true);
     expect(getPresence(deviceId)?.state).toBe('FOCUSING');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W4: agent cloud reporting merge (T-069, REC-006 / FR-027) and the DEC-021
+// schedule-run lifecycle. The hub now routes these messages into the same services the dashboard
+// uses; a domain conflict must be logged without dropping the presence socket.
+// ---------------------------------------------------------------------------
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+function sendFrame(socket: WebSocket, payload: Record<string, unknown>): void {
+  socket.send(JSON.stringify(payload));
+}
+
+describe('agent session reporting (T-069, REC-006/FR-027)', () => {
+  it('persists a dashboard-closed session from the agent report alone', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+
+    const clientSessionId = randomUUID();
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'report-start-1',
+      type: 'session.started',
+      clientSessionId,
+      startedAt,
+      plannedMinutes: 25,
+      source: 'MANUAL',
+    });
+
+    await waitFor(async () => (await Session.countDocuments({ clientSessionId })) === 1);
+    const session = await Session.findOne({ clientSessionId }).lean();
+    expect(String(session?.userId)).toBe(String(ownerId));
+    expect(String(session?.deviceId)).toBe(deviceId);
+    expect(session).toMatchObject({
+      status: 'ACTIVE',
+      plannedMinutes: 25,
+      actualMinutes: 0,
+      source: 'MANUAL',
+      endReason: null,
+    });
+  });
+
+  it('merges a dashboard POST and an agent report into ONE session (REC-006)', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+
+    const clientSessionId = randomUUID();
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    const created = await createSession(String(ownerId), {
+      deviceId,
+      durationMin: 25,
+      startedAt,
+      clientSessionId,
+      source: 'MANUAL',
+    });
+
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'report-start-merge',
+      type: 'session.started',
+      clientSessionId,
+      startedAt,
+      plannedMinutes: 25,
+      source: 'MANUAL',
+    });
+    await sleep(150);
+
+    expect(await Session.countDocuments()).toBe(1);
+    expect(String((await Session.findOne().lean())?._id)).toBe(created.session.id);
+  });
+
+  it('keeps the socket open and the original session on a conflicting duplicate report', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+
+    const clientSessionId = randomUUID();
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    await createSession(String(ownerId), {
+      deviceId,
+      durationMin: 25,
+      startedAt,
+      clientSessionId,
+      source: 'MANUAL',
+    });
+
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'report-start-conflict',
+      type: 'session.started',
+      clientSessionId,
+      startedAt,
+      plannedMinutes: 30, // conflicts with the dashboard's 25
+      source: 'MANUAL',
+    });
+    await sleep(150);
+
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+    expect(await Session.countDocuments()).toBe(1);
+    expect((await Session.findOne().lean())?.plannedMinutes).toBe(25);
+  });
+
+  it('finalises the session from session.ended and stays idempotent on repeats', async () => {
+    const { port } = await startHub();
+    const { deviceId, token } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+
+    const clientSessionId = randomUUID();
+    const startedAt = new Date(Date.now() - 60_000);
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'report-end-start',
+      type: 'session.started',
+      clientSessionId,
+      startedAt: startedAt.toISOString(),
+      plannedMinutes: 25,
+      source: 'MANUAL',
+    });
+    await waitFor(async () => (await Session.countDocuments({ clientSessionId })) === 1);
+
+    const endedPayload = {
+      v: PROTOCOL_VERSION,
+      id: 'report-end-1',
+      type: 'session.ended',
+      clientSessionId,
+      endedAt: new Date().toISOString(),
+      actualMinutes: 1,
+      status: 'COMPLETED',
+      endReason: 'COMPLETED',
+    };
+    sendFrame(client.socket, endedPayload);
+    await waitFor(
+      async () => (await Session.findOne({ clientSessionId }).lean())?.status === 'COMPLETED',
+    );
+
+    // A repeated report is a no-op, never a double count.
+    sendFrame(client.socket, { ...endedPayload, id: 'report-end-2' });
+    await sleep(150);
+
+    expect(await Session.countDocuments()).toBe(1);
+    const session = await Session.findOne({ clientSessionId }).lean();
+    expect(session).toMatchObject({
+      status: 'COMPLETED',
+      endReason: 'COMPLETED',
+      actualMinutes: 1,
+    });
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('ignores session.ended with no matching report (nothing is fabricated)', async () => {
+    const { port } = await startHub();
+    const { deviceId, token } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'report-end-unknown',
+      type: 'session.ended',
+      clientSessionId: randomUUID(),
+      endedAt: new Date().toISOString(),
+      actualMinutes: 5,
+      status: 'COMPLETED',
+      endReason: 'COMPLETED',
+    });
+    await sleep(150);
+
+    expect(await Session.countDocuments()).toBe(0);
+    expect(client.socket.readyState).toBe(WebSocket.OPEN);
+  });
+});
+
+describe('schedule-run lifecycle over the cloud channel (DEC-021)', () => {
+  async function createRun(
+    ownerId: Types.ObjectId,
+    deviceId: string,
+    status: 'STARTED' | 'MISSED' | 'CANCELLED_BY_USER' = 'STARTED',
+  ): Promise<{ runId: string }> {
+    const run = await ScheduleRun.create({
+      scheduleId: new Types.ObjectId(),
+      userId: ownerId,
+      deviceId: new Types.ObjectId(deviceId),
+      firedAt: new Date(Date.now() - 30_000),
+      status,
+      sessionId: null,
+    });
+    return { runId: String(run._id) };
+  }
+
+  it('confirms a dispatched run through session.started.scheduleRunId', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+    const { runId } = await createRun(ownerId, deviceId);
+
+    const clientSessionId = randomUUID();
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'sched-confirm-1',
+      type: 'session.started',
+      clientSessionId,
+      startedAt: new Date(Date.now() - 30_000).toISOString(),
+      plannedMinutes: 25,
+      source: 'SCHEDULE',
+      scheduleRunId: runId,
+    });
+
+    await waitFor(async () => (await ScheduleRun.findById(runId).lean())?.sessionId !== null);
+    const session = await Session.findOne({ clientSessionId }).lean();
+    expect(String((await ScheduleRun.findById(runId).lean())?.sessionId)).toBe(
+      String(session?._id),
+    );
+    expect(session?.source).toBe('SCHEDULE');
+  });
+
+  it('marks a run CANCELLED_BY_USER when the agent reports scheduleRunCancelled', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+    const { runId } = await createRun(ownerId, deviceId);
+
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'sched-cancel-1',
+      type: 'scheduleRunCancelled',
+      runId,
+      at: new Date().toISOString(),
+    });
+
+    await waitFor(
+      async () => (await ScheduleRun.findById(runId).lean())?.status === 'CANCELLED_BY_USER',
+    );
+    expect(await Session.countDocuments()).toBe(0); // a cancelled heads-up starts nothing
+  });
+
+  it('ignores a scheduleRunCancelled for a run dispatched to another device', async () => {
+    const { port } = await startHub();
+    const { deviceId, token, ownerId } = await createDevice();
+    const client = openAgentSocket(port, { token });
+    await waitForOpen(client.socket);
+    await waitFor(() => isDeviceConnected(deviceId));
+    const otherDeviceId = new Types.ObjectId().toHexString();
+    const { runId } = await createRun(ownerId, otherDeviceId);
+
+    sendFrame(client.socket, {
+      v: PROTOCOL_VERSION,
+      id: 'sched-cancel-foreign',
+      type: 'scheduleRunCancelled',
+      runId,
+      at: new Date().toISOString(),
+    });
+    await sleep(150);
+
+    expect((await ScheduleRun.findById(runId).lean())?.status).toBe('STARTED');
   });
 });
