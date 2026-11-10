@@ -10,6 +10,7 @@ import { networkInterfaces } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   authErrorMessageSchema,
+  focusRejectedMessageSchema,
   helloMessageSchema,
   localMessageSchema,
   stateMessageSchema,
@@ -378,7 +379,7 @@ describe('LinkServer messages', () => {
     await expect(client.closed).resolves.toMatchObject({ code: 1008 });
   });
 
-  it('refuses an unauthenticated enterFocus with UNAUTHENTICATED (REC-003)', async () => {
+  it('refuses an unauthenticated enterFocus with focusRejected UNAUTHENTICATED (REC-003)', async () => {
     const { address } = await startLink();
     const client = await connect(address.port);
     await client.next();
@@ -394,12 +395,12 @@ describe('LinkServer messages', () => {
         clientSessionId: SESSION_ID,
       }),
     );
-    const error = authErrorMessageSchema.parse(await client.next());
-    expect(error.code).toBe('UNAUTHENTICATED');
+    const rejection = focusRejectedMessageSchema.parse(await client.next());
+    expect(rejection.code).toBe('UNAUTHENTICATED');
     await expect(client.closed).resolves.toMatchObject({ code: 1008 });
   });
 
-  it('fails closed on an auth frame because attestation is W2 (no fake authOk)', async () => {
+  it('fails closed on an auth frame when no challenge was issued (unpaired)', async () => {
     const { address } = await startLink();
     const client = await connect(address.port);
     await client.next();
@@ -409,7 +410,7 @@ describe('LinkServer messages', () => {
     );
     const error = authErrorMessageSchema.parse(await client.next());
     expect(error.code).toBe('UNAUTHENTICATED');
-    expect(error.message).toMatch(/T-044|not enabled/i);
+    expect(error.message).toMatch(/no challenge/i);
     await expect(client.closed).resolves.toMatchObject({ code: 1008 });
   });
 
