@@ -15,25 +15,36 @@ import {
   dialog,
   ipcMain,
   powerMonitor,
+  safeStorage,
   type IpcMainInvokeEvent,
 } from 'electron';
 import type { OsName } from '@focus-mode/shared';
 import { resolveProtectedEntries } from './allowlist.js';
+import { CloudClient } from './cloud/client.js';
+import { createCredentialStore } from './cloud/storage.js';
 import { AgentEnvError, loadAgentEnv, type AgentConfig } from './config/env.js';
 import { FocusController, type FocusSnapshot } from './focus/controller.js';
 import { createFocusDriver } from './focus/drivers/index.js';
 import { FileJournal } from './focus/journal.js';
+import {
+  AttestationGate,
+  type AttestationBinding,
+  type AttestationRequest,
+  type AttestationVerification,
+} from './link/attestation.js';
 import { LinkServer } from './link/server.js';
 import type { LinkSnapshot } from './link/messages.js';
 import type { Logger } from './log.js';
 import { noopLogger } from './log.js';
 import { createElectronLogger } from './log-electron.js';
-import { generatePairingCode, pairCodeLogLabel, type PairingCode } from './pairing.js';
 import { AgentTray } from './tray.js';
 import type { AgentViewState } from './ui/view-state.js';
 
 const APP_NAME = 'Focus Agent';
-/** The cloud assigns a real device id on pairing (W2/T-042); W1 is local-only. */
+/**
+ * Local hello label for this agent process. The authoritative device identity on the local
+ * channel is `authOk {deviceId,userId}` after attestation (T-044); nothing trusts this label.
+ */
 const AGENT_ID = 'focus-agent-local';
 const WINDOW_SIZE = { width: 464, height: 620, minWidth: 380, minHeight: 520 } as const;
 const UI_BACKGROUND = '#1E1B4B';
@@ -101,8 +112,44 @@ async function bootstrap(): Promise<void> {
   const uiIndexPath = resolveUiIndexPath();
   const uiUrl = pathToFileURL(uiIndexPath).toString();
 
-  const paired = false; // Persisted pairing + cloud poll arrive in W2 (T-042).
-  const pairing: PairingCode = generatePairingCode();
+  // Pairing/token state lives in the cloud client; the controller owns the IDLE/PAIRED/FOCUSING
+  // truth (INV-5). `cloud` is created after the tray so an early `paired` event can refresh it.
+  let cloud: CloudClient | undefined;
+  const credentialStore = createCredentialStore({
+    directory: app.getPath('userData'),
+    // Electron 45's supported async safeStorage API; the sync calls are deprecated and can
+    // report a false "unavailable" on macOS, which would silently disable durable pairing.
+    safeStorage: {
+      isEncryptionAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+      encryptString: (plainText) => safeStorage.encryptStringAsync(plainText),
+      decryptString: async (encrypted) => (await safeStorage.decryptStringAsync(encrypted)).result,
+    },
+    logger,
+  });
+  const currentPairing = (): AttestationBinding | null => cloud?.getPairing() ?? null;
+  // No API base URL means the agent cannot register a code or verify attestations: it stays
+  // unpaired (honest IDLE, no code shown) instead of pretending to be pair-able.
+  const attestationGate =
+    config.apiBaseUrl === undefined
+      ? undefined
+      : new AttestationGate({
+          baseUrl: config.apiBaseUrl,
+          getBinding: currentPairing,
+          logger,
+        });
+  const verifyAttestation = async (
+    request: AttestationRequest,
+  ): Promise<AttestationVerification> => {
+    if (attestationGate === undefined) {
+      return {
+        ok: false,
+        code: 'UNAUTHENTICATED',
+        reason: 'NOT_PAIRED',
+        message: 'Attestation verification is not configured.',
+      };
+    }
+    return attestationGate.verify(request);
+  };
 
   const controller = new FocusController({
     driver: createFocusDriver({
@@ -113,7 +160,7 @@ async function bootstrap(): Promise<void> {
     journal: new FileJournal({ directory: app.getPath('userData'), logger }),
     protectedEntries: resolveProtectedEntries(os, []),
     os,
-    initialPaired: paired,
+    initialPaired: false,
     logger,
     onEvent: (event) => {
       if (event.type === 'focusStarted') {
@@ -146,28 +193,38 @@ async function bootstrap(): Promise<void> {
       const snapshot: FocusSnapshot = controller.getState();
       return {
         state: snapshot.state,
-        paired,
+        paired: cloud?.getState().paired ?? false,
         ...(snapshot.session === undefined ? {} : { session: snapshot.session }),
         protected: snapshot.protected,
         allowList: snapshot.allowList,
       };
     },
+    getPairing: currentPairing,
+    ...(config.apiBaseUrl === undefined
+      ? {}
+      : {
+          // Ed25519 attestation verification (REC-003/SEC-7); fails closed without a base URL.
+          verifyAttestation,
+        }),
     onPaired: () => {
-      // Only a nudge: the device token is obtained by polling the cloud (W2/T-042).
-      logger.info('Dashboard sent the paired nudge; cloud poll handler lands in T-042');
-      tray?.refresh();
+      // A nudge only: the device token comes from polling the cloud (REC-002), never the page.
+      logger.info('Dashboard sent the paired nudge; polling the cloud');
+      cloud?.notifyPairedNudge();
     },
     logger,
   });
 
   function viewState(): AgentViewState {
     const snapshot: FocusSnapshot = controller.getState();
+    const cloudState = cloud?.getState();
+    const isPaired = cloudState?.paired ?? false;
     return {
       agentVersion: app.getVersion(),
       os,
       state: snapshot.state,
-      paired,
-      pairingCode: paired ? null : pairing.value,
+      paired: isPaired,
+      // The real code from T-042, shown in this window/tray only — never on any wire (DEC-003).
+      pairingCode: isPaired ? null : (cloudState?.pairingCode ?? null),
       capabilities: controller.capabilities(),
       session: snapshot.session ?? null,
       protected: snapshot.protected,
@@ -276,6 +333,11 @@ async function bootstrap(): Promise<void> {
       } catch (error) {
         logger.error('Dashboard link shutdown failed', error);
       }
+      try {
+        await cloud?.stop();
+      } catch (error) {
+        logger.error('Cloud link shutdown failed', error);
+      }
       tray?.destroy();
       tray = undefined;
       if (mainWindow !== undefined && !mainWindow.isDestroyed()) mainWindow.destroy();
@@ -292,9 +354,6 @@ async function bootstrap(): Promise<void> {
     headless: config.headless,
     loopbackPort: config.port,
   });
-  // Presence only: the digits must never reach the log or the wire (DEC-003).
-  logger.debug(pairCodeLogLabel(pairing));
-
   // FR-023: restore from the journal BEFORE the window/link can report state.
   const recovery = await controller.recoverFromJournal();
   if (recovery !== null) {
@@ -342,6 +401,59 @@ async function bootstrap(): Promise<void> {
       startAtLoginEnabled: () => AgentTray.loginItemEnabled(),
       setStartAtLogin,
     });
+  }
+
+  // Cloud pairing + presence runs after the tray exists so `paired`/`revoked` can refresh it.
+  // Without AGENT_API_BASE_URL there is nothing to pair against, so the agent stays IDLE and the
+  // window shows no code rather than a code that can never work.
+  if (config.apiBaseUrl === undefined) {
+    logger.warn(
+      'AGENT_API_BASE_URL is not set; cloud pairing is disabled and no pairing code is issued',
+    );
+  } else {
+    cloud = new CloudClient({
+      baseUrl: config.apiBaseUrl,
+      agentVersion: app.getVersion(),
+      os,
+      controller: {
+        getState: () => controller.getState(),
+        markPaired: () => controller.markPaired(),
+        markUnpaired: () => controller.markUnpaired(),
+        exitFocus: (reason) => controller.exitFocus(reason),
+      },
+      store: credentialStore,
+      logger,
+    });
+
+    cloud.on('paired', (info) => {
+      logger.info('Cloud pairing established; local dashboards may now authenticate', {
+        deviceId: info.deviceId,
+      });
+      // Dashboards connected before pairing could not get a challenge; issue one now.
+      linkServer.refreshPairing();
+      tray?.refresh();
+    });
+    cloud.on('revoked', (info) => {
+      logger.info('Cloud revoked this device; back to the unpaired flow', { reason: info.reason });
+      tray?.refresh();
+    });
+    cloud.on('scheduleDue', (message) => {
+      // INV-2: an announcement only. W4 owns the >=10 s heads-up + local consent; this module
+      // must never start a session on its own.
+      logger.info('Cloud announced a scheduled run; no session started (heads-up lands in W4)', {
+        runId: message.runId,
+        scheduleId: message.scheduleId,
+        durationMin: message.durationMin,
+        allowListVersion: message.allowListVersion,
+      });
+    });
+
+    try {
+      await cloud.start();
+    } catch (error) {
+      // A cloud failure must not take the agent (or its focus restore) down.
+      logger.error('Cloud pairing client failed to start', error);
+    }
   }
 
   app.on('second-instance', () => {

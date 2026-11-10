@@ -4,16 +4,26 @@
 // builder here has access to the pairing code.
 
 import {
+  appsMessageSchema,
   authErrorMessageSchema,
+  authOkMessageSchema,
+  challengeMessageSchema,
+  focusRejectedMessageSchema,
   helloMessageSchema,
   stateMessageSchema,
   type AgentCapabilities,
   type AgentState,
   type AppEntry,
+  type AppsMessage,
   type AuthErrorMessage,
+  type AuthOkMessage,
+  type ChallengeMessage,
   type ErrorCode,
+  type FocusRejectedCode,
+  type FocusRejectedMessage,
   type HelloMessage,
   type OsName,
+  type RunningApp,
   type SessionInfo,
   type StateMessage,
 } from '@focus-mode/shared';
@@ -58,6 +68,48 @@ export function buildHello(snapshot: LinkSnapshot, identity: AgentIdentity): Hel
 }
 
 /** Answer to `getState`; the only supported read in W1 (control messages need attestation). */
+/** Single-use handshake step 2 (contract §4.4); only sent while the agent is paired. */
+export function buildChallenge(nonce: string): ChallengeMessage {
+  return challengeMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'challenge',
+    nonce,
+  });
+}
+
+/** Handshake success: no secret travels here, only the ids the attestation was bound to. */
+export function buildAuthOk(deviceId: string, userId: string): AuthOkMessage {
+  return authOkMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'authOk',
+    deviceId,
+    userId,
+  });
+}
+
+/** Controlled rejection; used for unauthenticated control messages and unavailable features. */
+export function buildFocusRejected(code: FocusRejectedCode, message: string): FocusRejectedMessage {
+  return focusRejectedMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'focusRejected',
+    code,
+    message,
+  });
+}
+
+/** REC-007 answer: key + label + running only, never window titles (INV-6). */
+export function buildApps(apps: readonly RunningApp[]): AppsMessage {
+  return appsMessageSchema.parse({
+    v: 1,
+    id: nextMessageId('a'),
+    type: 'apps',
+    apps,
+  });
+}
+
 export function buildState(snapshot: LinkSnapshot): StateMessage {
   return stateMessageSchema.parse({
     v: 1,

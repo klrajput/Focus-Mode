@@ -1,25 +1,34 @@
-// link/server.ts — the loopback WebSocket server for dashboard ↔ Focus Agent (T-031, §6.1).
+// link/server.ts — the loopback WebSocket server for dashboard ↔ Focus Agent (T-031/T-044, §6.1).
 // Binds 127.0.0.1 only and rejects upgrades whose Origin/Host/subprotocol fail, then speaks the
 // frozen `focus.v1` protocol from `@focus-mode/shared`. It is deliberately Electron-free so the
-// security checks can be tested with a real `ws` client.
-// Attestation (challenge/auth/authOk) is W2/T-044: an `auth` frame currently fails closed with
-// `authError UNAUTHENTICATED` — there is no faked authentication path in this build.
+// security checks and the attested handshake can be tested with a real `ws` client.
+// REC-003/SEC-7: a paired agent issues a single-use `challenge`; control messages are refused with
+// `focusRejected{UNAUTHENTICATED}` until a cloud-signed EdDSA attestation for that nonce passes.
 
+import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import {
   ERROR_CODES,
   LOCAL_MESSAGE_DIRECTIONS,
-  UNAUTHENTICATED_INBOUND_TYPES,
   localMessageSchema,
   type ErrorCode,
   type LocalMessage,
+  type LocalMessageType,
 } from '@focus-mode/shared';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { noopLogger, type Logger } from '../log.js';
+import type {
+  AttestationBinding,
+  AttestationRequest,
+  AttestationVerification,
+} from './attestation.js';
 import {
   buildAuthError,
+  buildAuthOk,
+  buildChallenge,
+  buildFocusRejected,
   buildHello,
   buildState,
   type AgentIdentity,
@@ -37,10 +46,25 @@ export const MAX_CONNECTIONS = 3;
 export const MAX_MESSAGES_PER_SECOND = 20;
 /** Port the dashboard scans after `AGENT_PORT` (§4.1: 4545–4549 → 5 candidates). */
 export const DEFAULT_PORT_FALLBACK_ATTEMPTS = 5;
+/** 32 random bytes → 43 URL-safe characters, within the frozen nonce schema (16–128). */
+export const NONCE_BYTES = 32;
+
+/** Control messages: never served before `authOk` (REC-003). */
+const CONTROL_MESSAGE_TYPES: ReadonlySet<LocalMessageType> = new Set([
+  'enterFocus',
+  'exitFocus',
+  'listApps',
+]);
 
 export interface LinkAddress {
   readonly host: typeof LOOPBACK_HOST;
   readonly port: number;
+}
+
+interface ConnectionState {
+  /** Outstanding single-use challenge nonce; null after use (or while unpaired). */
+  nonce: string | null;
+  authenticated: boolean;
 }
 
 export interface LinkServerOptions {
@@ -49,8 +73,12 @@ export interface LinkServerOptions {
   readonly allowedOrigins: readonly string[];
   readonly identity: AgentIdentity;
   readonly getSnapshot: () => LinkSnapshot;
-  /** The `paired` frame is a nudge only; W2's cloud poll handler is wired here. */
+  /** The `paired` frame is a nudge only; T-042's cloud poll handler is wired here. */
   readonly onPaired?: () => void;
+  /** Pairing identity for the attested handshake; null while unpaired. */
+  readonly getPairing?: () => AttestationBinding | null;
+  /** EdDSA attestation verifier; absent means attestation is not configured and fails closed. */
+  readonly verifyAttestation?: (request: AttestationRequest) => Promise<AttestationVerification>;
   readonly logger?: Logger;
   readonly portFallbackAttempts?: number;
   readonly maxConnections?: number;
@@ -123,6 +151,11 @@ function requestedProtocols(header: string | string[] | undefined): readonly str
     .filter((protocol) => protocol.length > 0);
 }
 
+/** Cryptographically random, URL-safe single-use nonce (REC-003). */
+export function createChallengeNonce(): string {
+  return randomBytes(NONCE_BYTES).toString('base64url');
+}
+
 /**
  * The dashboard link. One instance per agent process. `start()` resolves with the bound port
  * (which may be +1…+4 over the configured one) so the tray/UI can report it.
@@ -136,6 +169,7 @@ export class LinkServer {
   readonly #maxPayloadBytes: number;
   readonly #portFallbackAttempts: number;
   readonly #rateWindows = new WeakMap<WebSocket, number[]>();
+  readonly #connections = new Map<WebSocket, ConnectionState>();
 
   #httpServer: Server | undefined;
   #wss: WebSocketServer | undefined;
@@ -237,7 +271,31 @@ export class LinkServer {
     if (httpServer !== undefined) {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     }
+    this.#connections.clear();
     this.#address = undefined;
+  }
+
+  /**
+   * Called when the agent becomes paired while dashboards are already connected: they could not
+   * receive a challenge earlier, so one is issued now (still single use, still agent-generated).
+   */
+  refreshPairing(): void {
+    const binding = this.#pairing();
+    if (binding === null) return;
+    for (const [socket, state] of this.#connections) {
+      if (state.authenticated || state.nonce !== null) continue;
+      this.#issueChallenge(socket, state);
+    }
+  }
+
+  #pairing(): AttestationBinding | null {
+    return this.#options.getPairing?.() ?? null;
+  }
+
+  #issueChallenge(socket: WebSocket, state: ConnectionState): void {
+    const nonce = createChallengeNonce();
+    state.nonce = nonce;
+    this.#send(socket, buildChallenge(nonce));
   }
 
   #handleUpgrade(
@@ -294,11 +352,14 @@ export class LinkServer {
   }
 
   #handleConnection(socket: WebSocket): void {
+    const state: ConnectionState = { nonce: null, authenticated: false };
+    this.#connections.set(socket, state);
     this.#rateWindows.set(socket, []);
     socket.on('message', (data, isBinary) => {
       this.#handleMessage(socket, data, isBinary);
     });
     socket.on('close', () => {
+      this.#connections.delete(socket);
       this.#rateWindows.delete(socket);
     });
     socket.on('error', (error) => {
@@ -307,6 +368,11 @@ export class LinkServer {
 
     const snapshot = this.#options.getSnapshot();
     this.#send(socket, buildHello(snapshot, this.#options.identity));
+
+    // Handshake step 2: only a paired agent has a binding to bind an attestation to.
+    if (snapshot.paired && this.#pairing() !== null) {
+      this.#issueChallenge(socket, state);
+    }
   }
 
   #handleMessage(socket: WebSocket, data: RawData, isBinary: boolean): void {
@@ -341,13 +407,38 @@ export class LinkServer {
       return;
     }
 
-    // REC-003: before attestation only auth/getState/paired are accepted; everything else gets
-    // UNAUTHENTICATED and the socket is closed. No control message is served in W1.
-    if (!UNAUTHENTICATED_INBOUND_TYPES.includes(message.type)) {
+    const state = this.#connections.get(socket);
+    if (state === undefined) {
+      this.#rejectAndClose(socket, ERROR_CODES.VALIDATION_ERROR, 'Unsupported message');
+      return;
+    }
+
+    // REC-003: the attestation is the only way to unlock control, so it is handled before gating.
+    if (message.type === 'auth') {
+      void this.#handleAuth(socket, state, message.attestation);
+      return;
+    }
+
+    // NFR-010: before authOk only `getState` and `paired` are served (besides `auth` above).
+    if (!state.authenticated && message.type !== 'getState' && message.type !== 'paired') {
+      if (CONTROL_MESSAGE_TYPES.has(message.type)) {
+        this.#logger.warn('Refused a control message on an unauthenticated socket', {
+          type: message.type,
+        });
+        this.#send(
+          socket,
+          buildFocusRejected(
+            'UNAUTHENTICATED',
+            'Attest this dashboard link before sending focus control messages.',
+          ),
+        );
+        socket.close(1008, 'UNAUTHENTICATED');
+        return;
+      }
       this.#rejectAndClose(
         socket,
         ERROR_CODES.UNAUTHENTICATED,
-        'Attestation required before control messages (T-044)',
+        'Attestation required before this message',
       );
       return;
     }
@@ -362,8 +453,18 @@ export class LinkServer {
         this.#send(socket, buildState(this.#options.getSnapshot()));
         return;
       }
-      case 'auth': {
-        this.#handleAuth(socket);
+      case 'listApps':
+      case 'enterFocus':
+      case 'exitFocus': {
+        // Authenticated, but dashboard-driven control is wired by T-045/T-046 (the Focus
+        // Controller stays untouched here, and no focus is ever faked).
+        this.#send(
+          socket,
+          buildFocusRejected(
+            'INVALID',
+            'Dashboard focus control is not enabled in this agent build yet.',
+          ),
+        );
         return;
       }
       default: {
@@ -373,21 +474,80 @@ export class LinkServer {
   }
 
   /**
-   * EXTENSION POINT — W2/T-044 owns attestation verification: fetch/cache
-   * `GET /agent/attest-key`, verify the EdDSA JWT (nonce, aud=deviceId, sub=userId, 60 s TTL),
-   * answer `authOk`, then gate enterFocus/exitFocus/listApps. Until then authentication is
-   * unavailable and the socket fails closed; this is not a fake success path.
+   * Handshake steps 3–4. The nonce is consumed before verification (single use), the EdDSA JWT is
+   * checked through the injected verifier, and a failure answers `authError` and closes.
    */
-  #handleAuth(socket: WebSocket): void {
-    this.#logger.warn('Received auth frame but attestation is not enabled (T-044)');
-    this.#send(
-      socket,
-      buildAuthError(
-        ERROR_CODES.UNAUTHENTICATED,
-        'Attestation verification is not enabled in this agent build (W2/T-044).',
-      ),
-    );
-    socket.close(1008, 'UNAUTHENTICATED');
+  async #handleAuth(socket: WebSocket, state: ConnectionState, token: string): Promise<void> {
+    if (state.authenticated) {
+      this.#logger.warn('Rejected a second auth frame on an authenticated socket');
+      this.#send(
+        socket,
+        buildAuthError(
+          ERROR_CODES.UNAUTHENTICATED,
+          'This dashboard link is already authenticated.',
+        ),
+      );
+      socket.close(1008, 'UNAUTHENTICATED');
+      return;
+    }
+
+    const nonce = state.nonce;
+    if (nonce === null) {
+      // No challenge outstanding: unpaired agent, or a replayed auth frame.
+      this.#logger.warn('Rejected auth without an outstanding challenge');
+      this.#send(
+        socket,
+        buildAuthError(
+          ERROR_CODES.UNAUTHENTICATED,
+          'No challenge is outstanding for this dashboard link.',
+        ),
+      );
+      socket.close(1008, 'UNAUTHENTICATED');
+      return;
+    }
+    // Single use: consume the nonce even if verification fails, so it can never be replayed.
+    state.nonce = null;
+
+    const verifier = this.#options.verifyAttestation;
+    if (verifier === undefined) {
+      this.#logger.warn('Received an attestation but no verifier is configured');
+      this.#send(
+        socket,
+        buildAuthError(
+          ERROR_CODES.UNAUTHENTICATED,
+          'Attestation verification is not configured in this agent build.',
+        ),
+      );
+      socket.close(1008, 'UNAUTHENTICATED');
+      return;
+    }
+
+    let result: AttestationVerification;
+    try {
+      result = await verifier({ token, nonce });
+    } catch (error) {
+      this.#logger.error(
+        'Attestation verification failed unexpectedly',
+        error instanceof Error ? error.message : 'unknown error',
+      );
+      this.#send(
+        socket,
+        buildAuthError(ERROR_CODES.UNAUTHENTICATED, 'The attestation could not be verified.'),
+      );
+      socket.close(1008, 'UNAUTHENTICATED');
+      return;
+    }
+
+    if (!result.ok) {
+      this.#logger.warn('Rejected an attestation', { reason: result.reason });
+      this.#send(socket, buildAuthError(result.code, result.message));
+      socket.close(1008, result.code);
+      return;
+    }
+
+    state.authenticated = true;
+    this.#logger.info('Dashboard link authenticated', { deviceId: result.deviceId });
+    this.#send(socket, buildAuthOk(result.deviceId, result.userId));
   }
 
   #acceptWithinRateLimit(socket: WebSocket): boolean {
