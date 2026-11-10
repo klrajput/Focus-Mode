@@ -54,7 +54,11 @@ describe('FileConsentStore', () => {
     store.write(record);
 
     expect(store.filePath).toBe(path.join(directory, NATIVE_CONSENT_FILE_NAME));
-    expect(statSync(store.filePath).mode & 0o777).toBe(0o600);
+    // POSIX permission bits are not meaningful on Windows (Node reports 0o666 for every file);
+    // the 0600 guarantee applies on POSIX platforms (A0 cross-platform CI fix).
+    if (process.platform !== 'win32') {
+      expect(statSync(store.filePath).mode & 0o777).toBe(0o600);
+    }
     expect(JSON.parse(readFileSync(store.filePath, 'utf8'))).toEqual(record);
     expect(store.read()).toEqual(record);
   });
