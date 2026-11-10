@@ -45,3 +45,6 @@ npm-debug.log*
 # Agent/tooling scratch (concurrent workers, headless smoke profiles)
 .tmp/
 .ghcache/
+
+# Playwright browsers when HOME cache is not writable (local sandbox); CI uses default
+.playwright-browsers/
