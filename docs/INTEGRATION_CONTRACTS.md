@@ -1,8 +1,8 @@
 # INTEGRATION_CONTRACTS.md — frozen contracts for Focus Mode (contracts-v1)
 
-> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN** — protocol `v1`, tag `contracts-v1` is applied by A0 after sign-off (§10).
+> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1 implementation accepted, W2 merged to main (CI green), W2 decisions recorded (DEC-013/014/015/016). A8 integration sign-off remains **PENDING** (§10).
 > **Machine-readable source of truth:** `shared/src/` (zod schemas + inferred types). This document is the human-readable contract and is kept consistent with it by `/tmp/a2-contracts/check.mjs` (§11).
-> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013** · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
+> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016** · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
 > **Change process:** any change to a message, endpoint, schema, field or status code requires an ADR + this doc + `shared/` update + A2 + A8 approval + a contract test (AGENTS §5). Requests go in the table in §8 — do not edit the doc directly without that process.
 
 ---
@@ -17,7 +17,7 @@
 
 2. `@focus-mode/shared` resolves to `shared/dist/index.js` + `.d.ts`. Run `npm run build -w @focus-mode/shared` after pulling (root `npm run build` does it first). `server/`, `agent/` and `client/` must only use the **public** exports listed in §1.7.
 3. The zod schema is the validator on **both** sides (NFR-001). Every object schema is strict: unknown fields are rejected, which is also the operator-injection defence (SEC-9, NFR-013).
-4. Response bodies are documented here as JSON; they are shaped by the server (T-010/T-012+). Request payloads are zod-validated against the named shared schema. (Response zod schemas are a possible `contracts-v1.1` addition — see clarification C-04.)
+4. Response bodies are documented here as JSON; they are shaped by the server (T-010/T-012+). Request payloads are zod-validated against the named shared schema. (Response zod schemas are deferred to `contracts-v1.1` per DEC-015 — see clarification C-04.)
 5. Terminology: **D** = dashboard (browser, React), **A** = Focus Agent (Electron, the only component touching the OS — INV-1), **API** = Express cloud server. The pairing **code** is shown only in the Focus Agent UI.
 
 ---
@@ -175,17 +175,27 @@ Exceeding a limit → `429 RATE_LIMITED` (no user enumeration in the message).
 - Chrome/Firefox may show a Local Network Access prompt; the dashboard shows a pre-prompt explainer and a help card on denial (UX_SPEC), connection code must fail soft.
 - The dashboard scans ports `4545`–`4549` (`VITE_AGENT_PORT`, `VITE_AGENT_PORT_RANGE`).
 
+### 1.11 DEC-013 conventions (frozen before W1 — apply to every package)
+
+These three conventions are part of the contract, not local preferences:
+
+| Convention | Rule | Where implemented |
+|---|---|---|
+| API base URL is the **FULL** base including `/api/v1` | `VITE_API_BASE_URL` (dashboard) and `AGENT_API_BASE_URL` (Focus Agent) already contain the prefix: dev `http://localhost:5000/api/v1`, deployed dashboard `/api/v1` (relative, same-origin `/api/*` rewrite), deployed agent `https://<api-host>/api/v1`. Callers append only endpoint paths (§3); no other file hard-codes `/api/v1` (NFR-004). | §1.1; `client/src/api/http.ts`, `agent/src/config/env.ts` |
+| Attestation = **EdDSA (Ed25519)** | Local control is unlocked by an attestation JWT with **60 s TTL**, bound to `nonce` + `aud = deviceId` + `sub = userId` (paired owner); keys are single-line PEM env values (`ATTEST_PRIVATE_KEY`, `ATTEST_PUBLIC_KEY`). Implemented with `node:crypto` (RFC 8037, DEC-016; `jsonwebtoken` only handles HS256 user access tokens). RS256 only via an amendment ADR (DEC-013). | §4.4; `POST /devices/:id/attest`, `GET /agent/attest-key` |
+| Seed identities (exam requirement) | `admin@demo.com / Admin@123` (ADMIN) and `kabir@demo.com / Kabir@123` (USER, persona Kabir); `POST /auth/register` always creates USER. | §1.8; `server/src/seed`, `SEED_*` env |
+
 ---
 
 ## 2. Pairing protocol (TECHNICAL_DESIGN §5.1, REC-002) — numbered sequence
 
 The PDF's `/devices/pair` cannot verify a code the cloud never saw. **REC-002** splits the flow into agent pre-registration + dashboard pair + agent poll. The code is shown **only in the Focus Agent UI**; it is typed by the user into the dashboard form and posted to the **cloud API** — it is never sent over the local `ws://127.0.0.1` channel (DEC-003, enforced by `shared/src/protocol.test.ts`).
 
-1. **Agent generates a code and pre-registers a digest (no account needed yet).**
+1. **Agent generates a 6-digit code and pre-registers its domain-separated digest (DEC-014; no account needed yet).**
 
    ```json
    {
-     "codeHmac": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+     "codeHmac": "d0aaea363fec7948aa4d651524195a40a8b4d5c1e2d8d4eaa846d76a904dc2d5",
      "os": "macOS",
      "name": "Kabir-MacBook",
      "agentVersion": "1.4.0"
@@ -204,8 +214,8 @@ The PDF's `/devices/pair` cannot verify a code the cloud never saw. **REC-002** 
    }
    ```
 
-   Server stores the pending device: digest as `pairTokenHash`, `pairExpiresAt = now + 10 min`, `enrollSecretHash`, `ownerId = null`. `409 CONFLICT` if the digest collides → agent generates a new code. Request schema: `deviceRegisterSchema`.
-   > Clarification **C-01** (below): the exact derivation of `codeHmac` must be settled in one ADR before T-040/T-042; the wire field is frozen as a 64-char SHA-256 hex digest.
+   Agent computation (DEC-014): `codeHmac = SHA-256("focus-mode-pair-v1|" + code)` as **64-char lowercase hex** — domain-separated so the same 6 digits always map to the same digest while the plaintext code never leaves the Focus Agent UI. Server stores `pairTokenHash = HMAC-SHA256(PAIR_PEPPER, codeHmac)` (never the plaintext, never the bare digest), `pairExpiresAt = now + 10 min`, `pairAttempts = 0`, `enrollSecretHash`, `ownerId = null`. `409 CONFLICT` if the digest collides → agent generates a new code. Request schema: `deviceRegisterSchema`.
+   > Resolved: this was clarification **C-01**; the two-stage derivation is frozen by **DEC-014** (§12 C-01).
 
 2. **Agent UI shows the 6-digit code** (and nothing else leaves the machine). The code is a string (`"000123"`), TTL ≤ 10 min, ≤ 5 attempts, never logged.
 
@@ -234,7 +244,7 @@ The PDF's `/devices/pair` cannot verify a code the cloud never saw. **REC-002** 
    }
    ```
 
-   Server HMACs the code, finds the pending device, checks TTL + attempts, sets `ownerId`, clears `pairTokenHash`, mints the device token (stores only its hash), and records `pairedAt`. Errors: `400 VALIDATION_ERROR`, `400 INVALID_PAIRING_CODE`, `410 PAIRING_EXPIRED`, `429 RATE_LIMITED`. Request schema: `devicePairSchema`. **The device token is not returned to the browser.**
+   Server recomputes the same chain from the user-typed code — `codeHmac = SHA-256("focus-mode-pair-v1|" + code)` then `HMAC-SHA256(PAIR_PEPPER, codeHmac)` — and finds the unique pending device whose `pairTokenHash` matches (DEC-014). It enforces TTL ≤ 10 min and ≤ 5 failed guesses (the 6th attempt latches pairing for the rest of the TTL window → `410 PAIRING_EXPIRED`; implementation note: the T-040 latch is per authenticated user, see §12 C-14), then sets `ownerId`, clears `pairTokenHash` (single use), mints the 256-bit device token (stores only its hash), and records `pairedAt`. Errors: `400 VALIDATION_ERROR`, `400 INVALID_PAIRING_CODE`, `410 PAIRING_EXPIRED`, `429 RATE_LIMITED`. Request schema: `devicePairSchema`. **The device token is not returned to the browser.**
 
 4. **Dashboard nudges the local agent** — a `paired` local message with `{}` only (a hostile page forging it can at worst make the agent poll harmlessly).
 
@@ -252,9 +262,9 @@ The PDF's `/devices/pair` cannot verify a code the cloud never saw. **REC-002** 
    }
    ```
 
-   The agent stores the token with Electron `safeStorage`, moves `IDLE → PAIRED`, and opens the outbound cloud WS (§5). A second poll returns `409 CONFLICT` (consumed) — the agent must fall back to a re-pair. `agent-secret` access; rate-limited.
+   `POST {base}/agent/enroll/poll` status semantics (C-12, documenting the merged T-040 implementation): while the device is registered but not yet owned/paired (`ownerId` is `null`) the endpoint returns `404 NOT_FOUND`; a wrong/unknown `enrollSecret` also returns `404 NOT_FOUND` (indistinguishable, so the endpoint cannot enumerate pending devices). Once the user has paired and the secret matches, `200` returns the token. After the token has been minted (enrollment consumed) further polls return `410 PAIRING_EXPIRED`. The Focus Agent treats `404`, `202`, `204` and `200`-without-token as *pending* and retries with backoff until the 10-minute code TTL; it treats `400/401/403/409/410` as terminal (stop and show the re-pair/refresh path). The agent stores the token with Electron `safeStorage`, moves `IDLE → PAIRED`, and opens the outbound cloud WS (§5). The token is issued **exactly once**. `agent-secret` access; rate-limited.
 
-Security notes: code HMAC + pepper stored server-side (SEC-5); device token 256-bit random, hash-only in DB, revocable via `DELETE /devices/:id` (SEC-6); pairing code never crosses the local channel and never appears in logs (NFR-016).
+Security notes: code HMAC + pepper stored server-side (SEC-5); device token 256-bit random, hash-only in DB, revocable via `DELETE /devices/:id` (SEC-6); pairing code never crosses the local channel and never appears in logs (NFR-016). Two-stage digest rationale and residual risk: DEC-014 + `docs/SECURITY_REVIEW.md`.
 
 ---
 
@@ -262,7 +272,7 @@ Security notes: code HMAC + pepper stored server-side (SEC-5); device token 256-
 
 ### 3.1 Endpoint table
 
-Path is relative to the full API base (§1.1). `Request schema` is the shared zod schema name from `shared/src/schemas/` — use it verbatim in the server `validate()` middleware and the client form resolver. “Success data” is the `data` value inside the success envelope.
+Path is relative to the full API base (§1.1). `Request schema` is the shared zod schema name from `shared/src/schemas/` — use it verbatim in the server `validate()` middleware and the client form resolver. “Success data” is the `data` value inside the success envelope. Every path below is appended to the **full** API base (`VITE_API_BASE_URL` / `AGENT_API_BASE_URL`, including `/api/v1` — DEC-013, §1.11); attestation tokens are EdDSA with a 60 s TTL (§4.4, DEC-013/DEC-016).
 
 | # | Method | Path | Access | Request schema | Success data (status) | Errors |
 |---|---|---|---|---|---|---|
@@ -303,7 +313,7 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 35 | DELETE | `/admin/agent-links/:id` | `ADMIN` | — | `{"id":"<id>"}` (200) | `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
 | 36 | GET | `/admin/stats` | `ADMIN` | — | aggregate stats (200) | `UNAUTHENTICATED`, `FORBIDDEN` |
 | 37 | POST | `/agent/register` | `agent-public` | `deviceRegisterSchema` | `{"deviceId":"<id>","enrollSecret":"<secret>"}` (201) | `VALIDATION_ERROR`, `CONFLICT`, `RATE_LIMITED` |
-| 38 | POST | `/agent/enroll/poll` | `agent-secret` | `enrollPollSchema` | `{"deviceToken":"<token>","userId":"<id>","allowListVersion":1}` (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `CONFLICT`, `PAIRING_EXPIRED` |
+| 38 | POST | `/agent/enroll/poll` | `agent-secret` | `enrollPollSchema` | `{"deviceToken":"<token>","userId":"<id>","allowListVersion":1}` (200; `404` while pending/unpaired or bad secret, `410` once consumed) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `PAIRING_EXPIRED` |
 | 39 | GET | `/agent/allowlist` | `agent-device` | — | allow-list + `version` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
 | 40 | GET | `/agent/attest-key` | `agent-public` | — | `{"publicKey":"<pem>","algorithm":"EdDSA"}` (200) | — |
 | 41 | WS | `/agent-link` | `device-token (WS)` | — | cloud messages, §5 | close `4401` on bad token |
@@ -334,8 +344,8 @@ ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — n
 | `presetUpdateSchema` | #30 | any non-empty subset of `{name?, apps?}` |
 | `agentLinkCreateSchema` | #33 | `{os, arch, label, url (absolute), version (semver)}` |
 | `agentLinkUpdateSchema` | #34 | any non-empty subset of the create fields |
-| `deviceRegisterSchema` | #37 | `{codeHmac, os, name, agentVersion}` |
-| `enrollPollSchema` | #38 | `{deviceId, enrollSecret}` (32–128 URL-safe chars) |
+| `deviceRegisterSchema` | #37 | `{codeHmac, os, name, agentVersion}`; `codeHmac` = 64-char lowercase SHA-256 hex of `"focus-mode-pair-v1\|" + code` (DEC-014) |
+| `enrollPollSchema` | #38 | `{deviceId, enrollSecret}` (32–128 URL-safe chars). Status semantics (C-12): `404 NOT_FOUND` while the device is registered but not yet owned/paired (`ownerId` null) **and** for a wrong/unknown `enrollSecret` (indistinguishable, no enumeration); `200` + token once paired with a matching secret; `410 PAIRING_EXPIRED` once the token has been issued (enrollment consumed). The agent treats `404`/`202`/`204`/`200`-without-token as pending → retries with backoff until the 10-min code TTL; `400/401/403/409/410` are terminal. |
 | `appEntrySchema` | nested everywhere | `{key: [a-z0-9-]{2,40}, label: 2–60, win?: string[], mac?: string[], linux?: string[]}` |
 | `attestRequestSchema` | #11 | `nonce` is generated by the agent and single-use |
 
@@ -587,13 +597,23 @@ Omitting or altering a protected entry → `400`:
 | `Origin` ∈ `AGENT_ALLOWED_ORIGINS` (server `CLIENT_URL` list, comma-separated; dev `http://localhost:5173`) | reject upgrade `403` |
 | `Host` ∈ `{127.0.0.1:<port>, localhost:<port>}` (DNS-rebinding defence) | reject upgrade `403` |
 | `Sec-WebSocket-Protocol: focus.v1` requested and selected | reject upgrade `400` |
-| Frame size ≤ 16 KB / rate ≤ 20 msg/s | close policy `1008` |
+| Frame size > 16 KB (`ws` `maxPayload`) | library closes the socket with **`1009`** (message too big) |
+| Protocol/policy violation (bad handshake, rate > 20 msg/s) | close policy **`1008`** (policy violation) |
+
+Oversized frames are closed by the `ws` library itself with `1009`; explicit protocol violations use `1008`. The dashboard treats **both** as a disconnect (fail closed) and reconnects with backoff (§4.7) — no behaviour change, this is a documentation correction (DEC-015).
 
 ### 4.3 Directions and pre-authentication rules
 
 `A → D` = agent → dashboard, `D → A` = dashboard → agent. The direction table is exported as `LOCAL_MESSAGE_DIRECTIONS`; the agent must reject a frame sent the wrong way.
 
-Before `authOk`, the agent accepts **only** these inbound messages (exported as `UNAUTHENTICATED_INBOUND_TYPES`): `auth`, `getState`, `paired`. Anything else before authentication gets an `authError {code:"UNAUTHENTICATED"}` and the socket is closed.
+Before `authOk`, the agent accepts **only** these inbound messages (exported as `UNAUTHENTICATED_INBOUND_TYPES`): `auth`, `getState`, `paired`. A control message (`enterFocus`, `exitFocus`, `listApps`) sent before authentication is answered with `focusRejected{code:'UNAUTHENTICATED'}` and the socket is closed (`1008`); any other unexpected pre-auth frame is answered with `authError{code:'UNAUTHENTICATED'}` and closed (`1008`).
+
+**`auth` failure mapping (C-13, implemented by T-044).** A single-use nonce is consumed before verification. Then:
+- a correctly signed token whose `sub` is **another account** (valid token, wrong user) → `authError{code:'FORBIDDEN'}`;
+- every other failure — malformed token, non-`EdDSA` alg, bad signature, expired or over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unavailable/unusable/unknown key, or an unpaired agent → `authError{code:'UNAUTHENTICATED'}`.
+The socket is closed after either error (`1008`).
+
+**Current W2 scope (not final contract).** After a valid attestation, dashboard control messages (`enterFocus`, `exitFocus`, `listApps`) are rejected with `focusRejected{code:'INVALID'}` until W3 wires the FocusController + REC-004 native consent. This is honest fail-closed behaviour, not the final contract: §4.5 remains the frozen message contract, and W3 replaces the rejection with real handling.
 
 ### 4.4 Handshake (REC-003, SEC-7)
 
@@ -657,7 +677,7 @@ Before `authOk`, the agent accepts **only** these inbound messages (exported as 
 }
 ```
 
-**Attestation rules (DEC-013):** algorithm **EdDSA (Ed25519)** — RS256 is only allowed via an amendment ADR; TTL **60 s**; claims bound to `nonce` (must equal the challenge nonce), `aud = deviceId`, `sub = userId` where `userId` equals the paired owner; the agent caches the public key from `GET /agent/attest-key`; keys are single-line PEM env values (`ATTEST_PRIVATE_KEY`, `ATTEST_PUBLIC_KEY`). A nonce is single-use — replay fails.
+**Attestation rules (DEC-013):** algorithm **EdDSA (Ed25519)** — RS256 is only allowed via an amendment ADR; TTL **60 s**; claims bound to `nonce` (must equal the challenge nonce), `aud = deviceId`, `sub = userId` where `userId` equals the paired owner; the agent caches the public key from `GET /agent/attest-key`; keys are single-line PEM env values (`ATTEST_PRIVATE_KEY`, `ATTEST_PUBLIC_KEY`). A nonce is single-use — replay fails. **Implementation note (DEC-016):** the EdDSA/Ed25519 JWT is signed and verified with `node:crypto` (RFC 8037; `createPrivateKey`/`createPublicKey`, `crypto.sign`/`crypto.verify` with `null` algorithm); `jsonwebtoken@9.0.3` cannot do EdDSA and is used only for the HS256 user access token (SEC-2). Any standard JOSE implementation can verify the same wire format.
 
 ### 4.5 Message catalog — local channel (16 messages, frozen)
 
@@ -842,7 +862,7 @@ Fields: `scheduleId: ObjectId`, `startsAt: iso`. Invariant: **INV-2** (a schedul
 
 ### 4.7 Reconnect & resync (FR-014)
 
-Dashboard `AgentLink`: connect → handshake; on close/error, reconnect with exponential backoff `0.5 s → 8 s`, re-scan ports 4545–4549, then `getState` to resync. Agent accepts ≤ 3 sockets. If the agent restarts during focus it restores from the journal *before* serving `hello` (INV-4/INV-5, `CRASH_RECOVERY`).
+Dashboard `AgentLink`: connect → handshake; on close/error, reconnect with exponential backoff `0.5 s → 8 s`, re-scan ports 4545–4549, then `getState` to resync. Agent accepts ≤ 3 sockets. If the agent restarts during focus it restores from the journal *before* serving `hello` (INV-4/INV-5, `CRASH_RECOVERY`). Close codes `1009` (oversized frame) and `1008` (protocol violation) both mean “socket not usable” → reset the handshake and reconnect (§4.2).
 
 ### 4.8 DEC-003 guarantee — no pairing code over the local channel
 
@@ -861,11 +881,14 @@ The 6-digit code is **never** in any local-channel message. It is shown in the a
 | Presence | agent → cloud `heartbeat` every **15 s**; server marks the device `DISCONNECTED` after **45 s** without a heartbeat |
 | Reconnect | agent reconnects with backoff; missed scheduleDue windows are recorded as `MISSED` by the server, never retried as commands |
 | Envelope | same `{v: 1, id, type}` envelope; strict payloads |
-| Bad/revoked token | socket closed with code `4401`; agent returns to `IDLE` after restoring any focus |
+| Unknown/invalid token at upgrade | the socket is upgraded then closed with **`4401`** (no presence entry; the agent treats it as revoked/token-invalid) |
+| Revoked (unpair) | server sends `revoked` then closes with `1000`; the agent restores first if FOCUSING, drops the stored token and returns to `IDLE` |
 
 ### 5.2 INV-2 whitelist (hard rule)
 
 Cloud → agent may send **only** `scheduleDue` and `revoked`. There is no `enterFocus`, no `exitFocus`, no `focusEnded` command from the cloud — scheduling may only *announce* a due run, and the agent then follows its local consent + heads-up path. `CLOUD_MESSAGE_DIRECTIONS` encodes this and `protocol.test.ts` asserts the cloud→agent set is exactly `['revoked','scheduleDue']`.
+
+> **Implementation note (DEC-016, see §6):** the attestation described in §4.4 is an RFC 8037 EdDSA/Ed25519 JWT signed/verified with `node:crypto`; `jsonwebtoken@9.0.3` handles only the HS256 user access token. The algorithm is unchanged — DEC-013 was amended only on the library claim.
 
 ### 5.3 Message catalog — cloud channel (5 messages, frozen)
 
@@ -967,6 +990,14 @@ Fields: none. Invariants: **INV-2**, **INV-5** (agent restores first if FOCUSING
 | Focus application/restore | Focus Agent | Act without pairing + user start (audit at agent) |
 | Pairing code display | Focus Agent UI | Send the code over the local channel (DEC-003) |
 
+### 6.1 DEC-013 conventions (frozen — W1 was accepted against these)
+
+| Convention | Contract value | Consumer code |
+|---|---|---|
+| API base URL | Full base **including `/api/v1`** in `VITE_API_BASE_URL` and `AGENT_API_BASE_URL`; callers append endpoint paths only (§1.1, §1.11) | `client/src/api/http.ts`, `agent/src/config/env.ts`, `agent/src/cloud/*` |
+| Attestation | **EdDSA (Ed25519)**, 60 s TTL, bound to `nonce` + `aud=deviceId` + `sub=userId`; signed/verified via `node:crypto` (RFC 8037, DEC-016); `jsonwebtoken` only for HS256 user tokens; RS256 needs an amendment ADR | `POST /devices/:id/attest`, `GET /agent/attest-key`, agent link auth (T-044) |
+| Seed identities | `admin@demo.com / Admin@123` (ADMIN), `kabir@demo.com / Kabir@123` (USER); registration always creates USER | `server/src/seed`, README, `SEED_*` env |
+
 ---
 
 ## 7. Error handling matrix (REST + local channel)
@@ -1001,14 +1032,15 @@ Rules that never change without replacing an INV in AGENTS §3: envelopes, the 1
 
 ## 10. Sign-off
 
-| Role | Owner | Area reviewed | Status | Date |
-|---|---|---|---|---|
-| Frontend | A4 | REST endpoints used by the dashboard (auth, devices, sessions, allow-list, schedules, insights, admin), local WS client, error envelopes | **PENDING** | — |
-| Backend | A5 | All REST endpoints/payload schemas, pairing + attestation, scheduler/agent-link semantics | **PENDING** | — |
-| Desktop Agent | A7 | Local WS server/handshake, all 16 local messages, cloud client/heartbeat/idempotency | **PENDING** | — |
-| Integration | A8 | Contract tests, env/base-URL convention, pairing flow, cross-package consistency | **PENDING** | — |
+| Role | Owner | Area reviewed | Status | Date | Evidence (one line) |
+|---|---|---|---|---|---|
+| Frontend | A4 | REST endpoints used by the dashboard (auth, devices, sessions, allow-list, schedules, insights, admin), local WS client, error envelopes | **ACCEPTED** | 2026-11-10 | PR #2 merged; CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests |
+| Backend | A5 | All REST endpoints/payload schemas, pairing + attestation, scheduler/agent-link semantics | **ACCEPTED** | 2026-11-10 | PR #3 merged; CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests |
+| Database | A6 | Data shapes behind §3 (9 collections + indexes incl. partial-unique ACTIVE session per device, DEC-013 seed identities) | **ACCEPTED** | 2026-11-10 | PR #4 merged; CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests |
+| Desktop Agent | A7 | Local WS server/handshake, all 16 local messages, cloud client/heartbeat/idempotency | **ACCEPTED** | 2026-11-10 | PR #4 merged (agent W1); CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests; W2 cloud/auth tracked in T-042/T-044 |
+| Integration | A8 | Contract tests, env/base-URL convention, pairing flow, cross-package consistency | **PENDING** | — | W2 integration review (T-047) still open |
 
-A0 collects the confirmations at the W0 gate; the tag `contracts-v1` is applied only when all four rows read **SIGNED** (or a written exception is recorded in §8).
+A0 recorded W1 acceptance on 2026-11-10: **PRs #2/#3/#4 merged, CI green on `ubuntu-24.04` / `windows-latest` / `macos-latest`, unit/integration suites 353 tests green**. W2 (pairing + attestation + agent-link hub + agent cloud client + client AgentLink) is **merged to `main` with CI green**. A8's W2 integration review is the only open sign-off; the `contracts-v1` tag stands, and any further wire change follows §9 (`contracts-v1.1`).
 
 ---
 
@@ -1020,7 +1052,7 @@ Run from the repo root (script in `/tmp`, not committed):
 node /tmp/a2-contracts/check.mjs
 ```
 
-Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc exists in TECHNICAL_DESIGN §5.2 (normalised `:id` params) and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`.
+Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc exists in TECHNICAL_DESIGN §5.2 (normalised `:id` params) and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) sign-off table has 4 ACCEPTED + 1 PENDING; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping + current W2 control scope are documented; (n) DEC-016 `node:crypto` EdDSA implementation note is documented. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 42/42).
 
 Script output (pasted from the actual run, 2026-11-10):
 
@@ -1042,8 +1074,13 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] fenced JSON examples parse as valid JSON — 42/42 valid (≥20 required)
 [PASS] DEC-003 pairing-code rule documented + contract test present — doc §4.8 + shared/src/protocol.test.ts
 [PASS] DEC-013: full base URL, EdDSA attestation, seed identities documented — VITE_API_BASE_URL + AGENT_API_BASE_URL + EdDSA + admin@demo.com + Kabir@123
-[PASS] governance: requested-changes table, change process, 4 PENDING sign-offs — 4 PENDING sign-off rows
-RESULT: 17/17 checks PASS
+[PASS] governance: requested-changes table, change process, 4 ACCEPTED + 1 PENDING sign-off — 4 ACCEPTED, 1 PENDING sign-off rows
+[PASS] DEC-014 two-stage pairing digest documented — SHA-256(domain|code) -> HMAC(PAIR_PEPPER, codeHmac), TTL 10 min, <=5 attempts, single use
+[PASS] DEC-015 close codes documented (1009 oversized frame / 1008 protocol violation) — both treated as a disconnect
+[PASS] C-12 pending enroll-poll semantics documented (§3.1 #38, §3.2, §5.1) — 404 pending/unpaired + bad secret, 410 consumed; agent retries 404/202/204/200-without-token
+[PASS] C-13 local auth error mapping + W2 control-message scope documented (§4.3) — wrong sub -> FORBIDDEN; others -> UNAUTHENTICATED; control msgs -> INVALID until W3
+[PASS] DEC-016 node:crypto EdDSA implementation note documented (§1.11/§4.4/§5.2/§6.1/§12) — EdDSA/Ed25519 via node:crypto; jsonwebtoken only HS256 user tokens
+RESULT: 22/22 checks PASS
 $ echo $?
 0
 ```
@@ -1054,25 +1091,31 @@ $ echo $?
 
 ## 12. Clarifications and contract decisions (documented, no silent changes)
 
-These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1`. Items marked **ADR** need an ADR before implementation reaches them.
+These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016. Items marked **ADR** need an ADR before implementation reaches them.
 
 | # | Topic | Decision / issue | Owner | Needs ADR |
 |---|---|---|---|---|
-| C-01 | **Pairing digest derivation** | TECHNICAL_DESIGN §5.1 says the agent posts `codeHmac` (pre-register) while the server verifies the code with `PAIR_PEPPER` (pair). The agent does not have the pepper, so the two HMACs cannot be compared as written. Wire field is frozen as a 64-char SHA-256 hex digest; **the derivation must be fixed in an ADR before T-040/T-042** (recommended: agent generates the code and sends `codeHmac = HMAC-SHA256(enrollSecret, code)` plus keeps the secret for polling; the dashboard posts the raw code to `/devices/pair` over HTTPS and the server stores a short-lived per-request hash for the agent to compare on its next poll — or the team explicitly accepts that `codeHmac` is computed with a shared non-secret pepper, relying on TTL/attempt limits for security). | A5/A7 + A0 | **YES** |
+| C-01 | **Pairing digest derivation** | **RESOLVED by DEC-014** (two-stage digest, implemented in W2): the Focus Agent computes `codeHmac = SHA-256("focus-mode-pair-v1\|" + code)` (64-char lowercase hex) and posts it to `/agent/register`; the server stores `pairTokenHash = HMAC-SHA256(PAIR_PEPPER, codeHmac)`; `/devices/pair` recomputes the same chain from the user-typed code and matches the pending device; TTL 10 min, ≤5 failed guesses then invalidation, single use; `/agent/enroll/poll` returns the device token exactly once. The plaintext code never crosses the local channel or the wire. | A5/A7 (decided A0) | no — **DEC-014** |
 | C-02 | Local `sessionId` format | Frozen as a **UUID equal to the dashboard/agent `clientSessionId`** (correlation id). The Mongo session `_id` never crosses the local channel. | A2 | no |
 | C-03 | Envelope on cloud messages | TECHNICAL_DESIGN §6.2 mandates `{v:1,id}` for local messages only; cloud messages use the **same envelope** for uniform validation/logging. | A2 | no |
-| C-04 | REST response schemas | Request bodies are zod schemas in `shared`; **response bodies are documented here only** (server shapes them). If typed responses are wanted, propose `contracts-v1.1` with `z.strictObject` response schemas + client types. | A2/A8 | proposal |
+| C-04 | REST response schemas | **DEFERRED to `contracts-v1.1` per DEC-015 (post-W2).** Request bodies are zod schemas in `shared`; response bodies are documented here and hand-typed in `client/src/api/types.ts` for W1. Not a release blocker. | A2/A8 | deferred — DEC-015 |
 | C-05 | `authError.code` | Uses the full 13-code vocabulary (TECHNICAL_DESIGN only says “code”); the agent in practice emits `UNAUTHENTICATED`/`NOT_PAIRED`/`INTERNAL`. | A7 | no |
 | C-06 | `deviceRegister.name` | Required (TECHNICAL_DESIGN lists `name` in the register fields); the agent sends the machine hostname. | A7 | no |
 | C-07 | `revoked` payload | Frozen empty; if a reason is ever added it is a contract change (§9). | A2 | no |
 | C-08 | `capabilities.reasons` cap | Max 10 strings × 200 chars (display-only, UX_SPEC help text). | A2 | no |
-| C-09 | Attestation algorithm | **EdDSA (Ed25519)** per DEC-013, 60 s TTL, `nonce`+`aud(deviceId)`+`sub(userId)` bound; RS256 only via amendment ADR. | A5 | no (DEC-013) |
+| C-09 | Attestation algorithm | **EdDSA (Ed25519)** per DEC-013, 60 s TTL, `nonce`+`aud(deviceId)`+`sub(userId)` bound; RS256 only via amendment ADR. **Implementation (DEC-016):** JWT signed/verified with `node:crypto` (RFC 8037); `jsonwebtoken@9.0.3` cannot do EdDSA and is used only for the HS256 user access token. | A5 | no (DEC-013/DEC-016) |
 | C-10 | MongoDB Memory Server dir | `MONGOMS_DOWNLOAD_DIR=<repo>/node_modules/.cache/mongodb-memory-server` on this dev machine (KI-006) — dev/test setup detail, **not** a wire-contract change. | A5/A9 | no |
+| C-11 | Local-channel close codes | An oversized frame (>16 KB, `ws` `maxPayload`) is closed by the `ws` library with **`1009`** (message too big); explicit protocol/policy violations use **`1008`**. The dashboard treats **both** as a disconnect (fail closed, reset handshake, reconnect with backoff). Documentation correction only — no behaviour change (DEC-015). | A7/A2 | no — DEC-015 |
+| C-12 | Pending enroll-poll status | **RESOLVED (documentation, W2).** `POST /agent/enroll/poll` returns `404 NOT_FOUND` while the device is registered but not yet owned/paired (`ownerId` null) **and** for a wrong/unknown `enrollSecret` (indistinguishable, no enumeration); `200` + token once paired with a matching secret; `410 PAIRING_EXPIRED` after the token was issued once (enrollment consumed). The Focus Agent treats `404`/`202`/`204`/`200`-without-token as pending and retries with backoff until the 10-min code TTL; `400/401/403/409/410` are terminal. Documented so a future server change cannot silently break pairing (§3.1 #38, §3.2, §5.1 step 5). | A5/A7 | no — documentation |
+| C-13 | Local `auth` error mapping | **RESOLVED (documentation, W2).** A correctly signed attestation whose `sub` is another account → `authError{code:'FORBIDDEN'}`; every other failure (malformed, bad alg/signature, expired/over-long TTL, not-yet-valid, wrong `aud`, nonce mismatch/replay, unknown/unusable key, unpaired) → `authError{code:'UNAUTHENTICATED'}`. Pre-auth control frames → `focusRejected{code:'UNAUTHENTICATED'}` + close `1008`. Authenticated control messages (`enterFocus`/`exitFocus`/`listApps`) currently → `focusRejected{code:'INVALID'}` until W3 wires FocusController + REC-004 consent — **current W2 scope, not final contract** (§4.3). | A7 | no — documentation |
+| C-14 | Pairing attempt latch scope | **Documented W2 implementation detail (no requirement change).** SEC-5's "≤5 attempts per code" is enforced as a latch of **5 failed guesses per authenticated user** within the 10-min code TTL (the server looks pending devices up by peppered digest, so a wrong guess cannot be attributed to one pending code). The 6th user attempt → `410 PAIRING_EXPIRED` for the rest of the window; correct codes presented by other users are unaffected. Residual risk bounded by the pair/register rate limits; tracked for W6 `SECURITY_REVIEW.md`. Needs an ADR if the team wants strict per-code semantics. | A5/A9 | proposed (if strict per-code required) |
 
 ---
 
 ## 13. Handoff notes
 
 - Files delivered by T-004/T-005 (A2): `shared/src/{protocol,errors,protected,types,index}.ts`, `shared/src/schemas/{common,app,auth,user,device,allowlist,schedule,session,insights,admin,index}.ts`, colocated tests, `shared/tsconfig.build.json`, this document.
-- Suggested branch (single branch for both tasks): `feat/a2-contracts`; commits: `feat(shared): freeze protocol, schemas, errors and protected set` and `docs(contracts): add frozen REST, local WS and cloud WS integration contracts`.
-- Not done here (owners in W1): server response shaping, agent handshake implementation, client AgentLink — all four sign-off rows in §10 must be signed first.
+- Delivered in W0 (branch `feat/a2-contracts`): `feat(shared): freeze protocol, schemas, errors and protected set`; `docs(contracts): add frozen REST, local WS and cloud WS integration contracts`.
+- W2 documentation pass (branch `feat/a2-contracts-w2`): `docs(contracts): record DEC-013/014 conventions and W2 sign-offs` — DEC-013 §1.11/§3/§6, DEC-014 pairing digest §2/§12, `1009`/`1008` close codes §4.2/§4.7/§12, W1 sign-offs §10.
+- W2 documentation pass b (branch `feat/a2-contracts-w2b`, this file only): `docs(contracts): document pending enroll-poll, auth errors and node:crypto EdDSA` — C-12 pending enroll-poll (§3.1 #38, §3.2, §5.1), C-13 auth/authError mapping + current W2 scope (§4.3, §12), DEC-016 implementation note (§1.11, §4.4, §5.2, §6.1, §12 C-09), W2 merged-status line (§0, §10), delta notes C-14. No code, schema or wire changes.
+- Open: A8's W2 integration review (§10); C-04 typed response schemas in `contracts-v1.1` (DEC-015).
