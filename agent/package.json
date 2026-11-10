@@ -28,5 +28,11 @@
     "electron": "45.2.3",
     "electron-builder": "26.18.0",
     "vitest": "5.1.0"
+  },
+  "homepage": "https://github.com/klrajput/Focus-Mode",
+  "author": "Focus Mode Team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/klrajput/Focus-Mode.git"
   }
 }

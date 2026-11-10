@@ -37,7 +37,8 @@ export interface FocusAgentBridge {
 const bridge: FocusAgentBridge = {
   getState: () => ipcRenderer.invoke('agent:get-state') as Promise<AgentViewState>,
   endFocus: () => ipcRenderer.invoke('agent:end-focus') as Promise<EndFocusResult>,
-  cancelSchedule: () => ipcRenderer.invoke('agent:cancel-schedule') as Promise<CancelScheduleResult>,
+  cancelSchedule: () =>
+    ipcRenderer.invoke('agent:cancel-schedule') as Promise<CancelScheduleResult>,
   quit: () => ipcRenderer.invoke('agent:quit') as Promise<QuitResult>,
   showConsentStatus: async () => {
     const state = (await ipcRenderer.invoke('agent:get-state')) as AgentViewState;
