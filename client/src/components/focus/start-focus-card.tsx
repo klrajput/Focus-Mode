@@ -181,7 +181,9 @@ export function StartFocusCard() {
           ) : null}
 
           <p id="start-focus-reason" className="max-w-prose text-[13px] text-muted">
-            {blockedReason === null ? 'You can review exactly what happens before it starts.' : blockedReason}
+            {blockedReason === null
+              ? 'You can review exactly what happens before it starts.'
+              : blockedReason}
           </p>
         </div>
       </CardBody>

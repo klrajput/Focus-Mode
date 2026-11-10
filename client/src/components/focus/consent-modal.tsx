@@ -86,8 +86,7 @@ export function ConsentModal({
     [durationMin, open],
   );
 
-  const allowListText =
-    allowListLabels.length === 0 ? 'none yet' : allowListLabels.join(', ');
+  const allowListText = allowListLabels.length === 0 ? 'none yet' : allowListLabels.join(', ');
 
   return (
     <Dialog

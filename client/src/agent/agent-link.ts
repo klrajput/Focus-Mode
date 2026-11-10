@@ -319,7 +319,9 @@ export class AgentLink implements AgentLinkClient {
   }
 
   endFocus(sessionId?: string): boolean {
-    return this.send(sessionId === undefined ? { type: 'exitFocus' } : { type: 'exitFocus', sessionId });
+    return this.send(
+      sessionId === undefined ? { type: 'exitFocus' } : { type: 'exitFocus', sessionId },
+    );
   }
 
   // -------------------------------------------------------------------------

@@ -34,7 +34,7 @@ export function DurationChips({ value, onChange, disabled = false }: DurationChi
   const errorId = useId();
   const [customOpen, setCustomOpen] = useState<boolean>(!isPreset(value));
   const [customText, setCustomText] = useState<string>(() =>
-    isPreset(value) ? '' : (value === null ? '' : String(value)),
+    isPreset(value) ? '' : value === null ? '' : String(value),
   );
 
   const customInvalid = customOpen && customText !== '' && value === null;

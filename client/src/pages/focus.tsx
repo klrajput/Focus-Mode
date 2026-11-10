@@ -26,11 +26,7 @@ import { useCountdown } from '../focus/use-countdown';
 import { formatClockTime, formatDuration, formatDateTime } from '../lib/format';
 
 /** The "stays open" categories are the fixed §5 consent promises, not invented device data. */
-const STAYS_OPEN_CATEGORIES = [
-  'All web browsers',
-  'The Focus Agent',
-  'System essentials',
-] as const;
+const STAYS_OPEN_CATEGORIES = ['All web browsers', 'The Focus Agent', 'System essentials'] as const;
 
 export function FocusPage() {
   const agent = useAgentLink();
@@ -128,10 +124,7 @@ export function FocusPage() {
           </div>
 
           <div className="mt-6 flex flex-col items-center">
-            <FocusRing
-              remaining={remaining}
-              total={Math.max(1, session.plannedMinutes * 60)}
-            />
+            <FocusRing remaining={remaining} total={Math.max(1, session.plannedMinutes * 60)} />
 
             {/* Announced only at minute granularity / 30 s / 10 s — never every second. */}
             <p role="timer" aria-live="polite" className="sr-only">

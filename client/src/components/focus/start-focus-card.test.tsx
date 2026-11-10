@@ -53,9 +53,7 @@ const DEVICE = {
 };
 
 const ALLOWLIST = {
-  protectedApps: [
-    { key: 'chrome', label: 'Google Chrome', mac: ['com.google.Chrome'] },
-  ],
+  protectedApps: [{ key: 'chrome', label: 'Google Chrome', mac: ['com.google.Chrome'] }],
   userApps: [{ key: 'vscode', label: 'Visual Studio Code', win: ['Code.exe'] }],
   version: 3,
 };
@@ -202,9 +200,7 @@ describe('StartFocusCard', () => {
     const start = await screen.findByRole('button', { name: 'Start Focus' });
     expect(start).toBeDisabled();
     expect(screen.getByText('No device connected — start your Focus Agent.')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Connect the Focus Agent to start a session/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Connect the Focus Agent to start a session/)).toBeInTheDocument();
   });
 
   it('disables Start with the Wayland/X11 reason when the agent cannot move windows', async () => {
@@ -336,9 +332,9 @@ describe('StartFocusCard', () => {
     await user.type(input, '500');
 
     // Both the inline field error and the button's describedby reason carry the approved sentence.
-    expect(screen.getAllByText('Enter a duration between 1 and 480 minutes.').length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      screen.getAllByText('Enter a duration between 1 and 480 minutes.').length,
+    ).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Start Focus' })).toBeDisabled();
   });
 });

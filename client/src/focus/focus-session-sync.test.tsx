@@ -121,10 +121,7 @@ function LocationProbe() {
   return <span data-testid="path">{location.pathname}</span>;
 }
 
-function tree(
-  overrides: Partial<AgentLinkContextValue>,
-  initialEntry = '/dashboard',
-) {
+function tree(overrides: Partial<AgentLinkContextValue>, initialEntry = '/dashboard') {
   return (
     <QueryClientProvider client={createTestQueryClient()}>
       <MemoryRouter initialEntries={[initialEntry]}>

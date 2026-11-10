@@ -254,7 +254,8 @@ function reducer(state: AgentLinkState, action: AgentLinkAction): AgentLinkState
       };
     case 'status': {
       const keepsSession =
-        state.session !== null && (action.status === 'FOCUSING' || action.status === 'DISCONNECTED');
+        state.session !== null &&
+        (action.status === 'FOCUSING' || action.status === 'DISCONNECTED');
       return {
         ...state,
         status: action.status,

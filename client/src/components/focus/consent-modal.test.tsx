@@ -65,7 +65,9 @@ describe('ConsentModal — UX_SPEC §5 copy', () => {
         'System essentials: Task Manager (Windows) / Activity Monitor (macOS), File Explorer (Windows) / Finder (macOS), the Dock / taskbar, System Settings',
       ),
     ).toBeInTheDocument();
-    expect(within(dialog).getByText('Your allow-listed apps: Visual Studio Code, Slack')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Your allow-listed apps: Visual Studio Code, Slack'),
+    ).toBeInTheDocument();
 
     expect(
       within(dialog).getByRole('heading', { name: 'These will step aside' }),
@@ -91,9 +93,7 @@ describe('ConsentModal — UX_SPEC §5 copy', () => {
         'On: apps that open or jump to the front during the session also step aside.',
       ),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText('Off: a newly opened app stays in front.'),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText('Off: a newly opened app stays in front.')).toBeInTheDocument();
   });
 
   it('states how to end focus and the fine print', () => {

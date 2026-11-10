@@ -16,7 +16,11 @@ import toast from 'react-hot-toast';
 import { Target, WifiOff } from 'lucide-react';
 
 import { useAgentLink } from '../../agent/agent-link-provider';
-import { END_UNREACHABLE_COPY, LINK_LOST_SHORT_COPY, focusingDocumentTitle } from '../../focus/copy';
+import {
+  END_UNREACHABLE_COPY,
+  LINK_LOST_SHORT_COPY,
+  focusingDocumentTitle,
+} from '../../focus/copy';
 import { formatClock, remainingSeconds, spokenRemaining } from '../../focus/countdown';
 import { Button } from '../ui/button';
 

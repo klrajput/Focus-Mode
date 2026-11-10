@@ -8,7 +8,8 @@ export const LINK_LOST_COPY =
   'Lost contact with your Focus Agent. Your session keeps running — the agent ends it on time. Reconnect to End from here.';
 
 /** Compact warning for the sticky indicator (same state, less space). */
-export const LINK_LOST_SHORT_COPY = 'Lost contact with your Focus Agent — the session keeps running.';
+export const LINK_LOST_SHORT_COPY =
+  'Lost contact with your Focus Agent — the session keeps running.';
 
 /** Shown when `exitFocus` could not be sent because no usable socket is open. */
 export const END_UNREACHABLE_COPY =

@@ -82,7 +82,9 @@ describe('FocusIndicator', () => {
 
     const bar = screen.getByRole('timer');
     expect(bar).toHaveTextContent('Focusing');
-    expect(bar).toHaveTextContent('Lost contact with your Focus Agent — the session keeps running.');
+    expect(bar).toHaveTextContent(
+      'Lost contact with your Focus Agent — the session keeps running.',
+    );
     expect(bar.getAttribute('aria-label')).toContain('Focus session: 1 minute');
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Reconnect' }));

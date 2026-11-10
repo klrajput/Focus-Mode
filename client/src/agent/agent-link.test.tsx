@@ -326,9 +326,9 @@ describe('AgentLink', () => {
     // No reload: the same socket now reports Connected, and getState resyncs the truth.
     expect(statuses.at(-1)).toBe('PAIRED');
     expect(link.isAuthenticated()).toBe(true);
-    expect(sockets[0]?.frames().filter((frame) => frame.type === 'getState').length).toBeGreaterThan(
-      1,
-    );
+    expect(
+      sockets[0]?.frames().filter((frame) => frame.type === 'getState').length,
+    ).toBeGreaterThan(1);
 
     // A second challenge on the same socket never starts a second attestation.
     sockets[0]?.receive(CHALLENGE);
