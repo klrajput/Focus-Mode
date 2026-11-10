@@ -38,3 +38,11 @@ paths = [
   '''(^|/)vitest\.config\.ts$''',
   '''(^|/)src/test/''',
 ]
+
+[[allowlists]]
+description = "Unit-test fixtures: obviously-fake high-entropy constants (device tokens, enroll secrets, peppers) used to exercise validation/redaction paths. Real secrets are never committed to tests; A9 reviews fixtures in the W6 security pass."
+regexTarget = "line"
+regexes = [
+  '''const (ENROLL_SECRET|DEVICE_TOKEN|PAIR_PEPPER|CODE_HMAC|ACCESS_TOKEN|JWT_SECRET)\s*=''',
+  '''(ENROLL_SECRET|DEVICE_TOKEN|PAIR_PEPPER)\s*[:=]\s*['"]''',
+]
