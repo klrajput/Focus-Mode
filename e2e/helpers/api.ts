@@ -106,3 +106,57 @@ export async function loginUser(
   const response = await request.post(`${API_BASE_URL}/auth/login`, { data: credentials });
   return unwrap<AuthResult>(response, 200);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Devices (INTEGRATION_CONTRACTS §3.1 #9/#10, §3.3 `device`) — used to arrange and to assert the
+// server-side truth of the pairing flow independently of what the dashboard renders.
+// ---------------------------------------------------------------------------------------------
+
+/** `device` object shape (contract §3.3). */
+export interface ApiDevice {
+  id: string;
+  name: string;
+  os: 'macOS' | 'windows' | 'linux';
+  status: 'CONNECTED' | 'FOCUSING' | 'DISCONNECTED';
+  agentVersion: string;
+  pairedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+/** Paginated list envelope (contract §1.6). */
+export interface ApiPaginated<T> {
+  items: T[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+/** Bearer header for owner-scoped API calls made outside the browser. */
+export function bearer(accessToken: string): { Authorization: string } {
+  return { Authorization: `Bearer ${accessToken}` };
+}
+
+/** GET /devices — the account's paired devices (contract §3.1 #9). */
+export async function listDevices(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<ApiPaginated<ApiDevice>> {
+  const response = await request.get(`${API_BASE_URL}/devices`, {
+    headers: bearer(accessToken),
+    params: { limit: 20, sort: '-lastSeenAt' },
+  });
+  return unwrap<ApiPaginated<ApiDevice>>(response, 200);
+}
+
+/** DELETE /devices/:id — unpair/revoke a device (contract §3.1 #10). */
+export async function revokeDevice(
+  request: APIRequestContext,
+  accessToken: string,
+  deviceId: string,
+): Promise<{ id: string; revoked: true }> {
+  const response = await request.delete(`${API_BASE_URL}/devices/${encodeURIComponent(deviceId)}`, {
+    headers: bearer(accessToken),
+  });
+  return unwrap<{ id: string; revoked: true }>(response, 200);
+}
