@@ -1,0 +1,37 @@
+{
+  "name": "@focus-mode/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Focus Mode dashboard — React 19 + Vite 8 + Tailwind 4 + TanStack Query SPA.",
+  "main": "dist/index.html",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "7.0.5",
+    "@tanstack/react-query": "5.107.1",
+    "lucide-react": "1.71.0",
+    "motion": "14.12.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-hook-form": "7.91.0",
+    "react-hot-toast": "2.6.1",
+    "react-router-dom": "7.18.5",
+    "recharts": "3.10.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "jsdom": "31.0.0",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.7",
+    "vitest": "5.1.0"
+  }
+}

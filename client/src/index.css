@@ -1,0 +1,3 @@
+/* T-001 placeholder — global Tailwind 4 stylesheet, replaced by A3/A4 design tokens in W1. */
+/* It exists so the Vite build resolves Tailwind before the real theme is written. */
+@import 'tailwindcss';

@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output (never commit build artifacts)
+dist/
+build/
+out/
+release/
+client/dist/
+agent/release/
+
+# Test / coverage output
+coverage/
+test-results/
+playwright-report/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Secrets and env files (DEC-002/NFR-004) — only the commented .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Tooling caches and scratch space
+.npmcache/
+.spikes/
+.worktrees/
+
+# OS cruft
+.DS_Store
+
+# exam blueprint reference — not redistributed (DEC-010)
+/project-blueprint/
+/PROJECT.md
+/REQUIREMENTS.md
+/TECHNICAL_DESIGN.md
+/IMPLEMENTATION_PLAN.md
+/AGENTS.md
+/PLUGINS_AND_TOOLS.md
+/DEEPSEEK_MASTER_PROMPT.md
+/DEVELOPMENT_HANDOVER.md

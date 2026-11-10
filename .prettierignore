@@ -1,0 +1,33 @@
+# Generated / vendored — never formatted by this repo
+node_modules/
+dist/
+build/
+out/
+release/
+coverage/
+.npmcache/
+.spikes/
+package-lock.json
+agent/release/
+client/dist/
+
+# Exam blueprint reference material — not product code, owned by the exam brief (DEC-010)
+project-blueprint/
+/PROJECT.md
+/REQUIREMENTS.md
+/TECHNICAL_DESIGN.md
+/IMPLEMENTATION_PLAN.md
+/AGENTS.md
+/PLUGINS_AND_TOOLS.md
+/DEEPSEEK_MASTER_PROMPT.md
+/DEVELOPMENT_HANDOVER.md
+
+# A0-owned root docs (append-only / hand-off material), kept byte-stable by their owner.
+/PROMPTS.md
+/SPEC.md
+/README.md
+
+# System-of-record docs are append-only tables authored by A0/A1/A3/A8/A9.
+# They are kept byte-stable so parallel doc edits never lose a row; owners run
+# `prettier --write <file>` themselves before committing.
+docs/
