@@ -1,8 +1,9 @@
-// T-001 placeholder — shared module entry point, replaced by owner A2 in W1.
-// It exists so the workspace graph builds and typechecks before the real protocol lands.
+// shared/src/index.ts — public barrel for `@focus-mode/shared`, the single import point for the
+// dashboard, API and Focus Agent. Re-exports the frozen protocol, error codes, protected set,
+// REST schemas and transport types. Nothing here performs I/O, so every package can import it.
 
-/**
- * Envelope version of the dashboard ↔ Focus Agent local-channel protocol.
- * A2 freezes the real message types in `shared/src/protocol.ts` (T-004).
- */
-export const PROTOCOL_VERSION = 1;
+export * from './errors.js';
+export * from './types.js';
+export * from './schemas/index.js';
+export * from './protected.js';
+export * from './protocol.js';
