@@ -467,6 +467,7 @@ describe('ScheduleRun model', () => {
     });
     expect(missed.status).toBe('MISSED');
     expect(missed.deviceId).toBeNull();
+    expect(missed.sessionId).toBeNull();
     expect(SCHEDULE_RUN_STATUSES).toContain('CANCELLED_BY_USER');
 
     const badStatus = new ScheduleRun({
@@ -477,6 +478,51 @@ describe('ScheduleRun model', () => {
     });
     badStatus.set('status', 'EXPLODED');
     await expect(badStatus.validate()).rejects.toThrow(/valid enum value/);
+  });
+
+  it('links a run to its confirming session and defaults sessionId to null (DEC-021)', async () => {
+    const owner = await createUser();
+    const device = await createDevice(owner._id);
+    const schedule = await Schedule.create({
+      userId: owner._id,
+      name: 'Deep Work Morning',
+      days: [1],
+      startTime: '09:00',
+      durationMin: 60,
+    });
+    const confirmedSession = await Session.create(
+      buildSession(owner._id, device._id, {
+        status: 'COMPLETED',
+        endedAt: new Date(NOW.getTime() + 3_600_000),
+        actualMinutes: 60,
+        endReason: 'COMPLETED',
+        source: 'SCHEDULE',
+      }),
+    );
+
+    // Dispatched but not yet confirmed: null sessionId (scheduleDue sent, no focus started).
+    const dispatched = await ScheduleRun.create({
+      scheduleId: schedule._id,
+      userId: owner._id,
+      deviceId: device._id,
+      firedAt: atHour(NOW, 9),
+      status: 'STARTED',
+    });
+    expect(dispatched.sessionId).toBeNull();
+
+    // Confirmed by session.started carrying this runId (DEC-021).
+    const confirmed = await ScheduleRun.create({
+      scheduleId: schedule._id,
+      userId: owner._id,
+      deviceId: device._id,
+      firedAt: atHour(NOW, 9),
+      status: 'STARTED',
+      sessionId: confirmedSession._id,
+    });
+    expect(confirmed.sessionId?.toString()).toBe(confirmedSession._id.toString());
+
+    // DEC-021 adds no lifecycle status: the frozen enum is unchanged.
+    expect([...SCHEDULE_RUN_STATUSES]).toEqual(['STARTED', 'MISSED', 'CANCELLED_BY_USER']);
   });
 });
 
@@ -620,6 +666,8 @@ describe('TECHNICAL_DESIGN §4 indexes', () => {
 
   it('scheduleRuns, notifications and agentLinks use their blueprint indexes', () => {
     expectIndex(ScheduleRun, { scheduleId: 1, firedAt: 1 });
+    // DEC-021 stale-run sweep: dispatched-but-unconfirmed runs by age.
+    expectIndex(ScheduleRun, { status: 1, firedAt: 1 });
     expectIndex(Notification, { userId: 1, createdAt: -1 });
     expectIndex(AgentLink, { os: 1 });
   });

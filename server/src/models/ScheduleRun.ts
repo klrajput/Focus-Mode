@@ -3,7 +3,9 @@
 // minute matches, then marks it STARTED when the agent confirms a focus start, or MISSED when no
 // connected device could start it (which also produces the missed-run notification). The compound
 // `{scheduleId, firedAt}` index is the idempotency guard that stops a schedule firing twice in the
-// same minute; `deviceId` stays null for a MISSED run (no device acted).
+// same minute; `deviceId` stays null for a MISSED run (no device acted). `sessionId` links the run
+// to the focus session the agent confirms (`session.started` carries `scheduleRunId`, DEC-021) and
+// stays null while dispatch is unconfirmed; `{status, firedAt}` serves the stale-run sweep.
 
 import { Schema, model, type HydratedDocument, type Model, type Types } from 'mongoose';
 import { SCHEDULE_RUN_STATUSES, type ScheduleRunStatus } from './enums.js';
@@ -17,6 +19,12 @@ export interface IScheduleRun {
   /** The scheduled minute the run is for (UTC instant computed from user timezone). */
   firedAt: Date;
   status: ScheduleRunStatus;
+  /**
+   * Session that confirmed this run (DEC-021). `null` = the run was dispatched
+   * (`scheduleDue` sent) but no scheduled focus started yet; set when the agent reports
+   * `session.started` with this `scheduleRunId`.
+   */
+  sessionId: Types.ObjectId | null;
 }
 
 export type ScheduleRunDocument = HydratedDocument<IScheduleRun>;
@@ -33,6 +41,7 @@ const scheduleRunSchema = new Schema<IScheduleRun>(
       required: true,
       default: 'STARTED',
     },
+    sessionId: { type: Schema.Types.ObjectId, ref: 'Session', default: null },
   },
   { collection: 'scheduleRuns' },
 );
@@ -41,6 +50,8 @@ const scheduleRunSchema = new Schema<IScheduleRun>(
 scheduleRunSchema.index({ scheduleId: 1, firedAt: 1 });
 // Missed-run notifications and per-user run history read by owner.
 scheduleRunSchema.index({ userId: 1, firedAt: -1 });
+// DEC-021 stale-run sweep: dispatched-but-unconfirmed runs ordered by age (status + firedAt).
+scheduleRunSchema.index({ status: 1, firedAt: 1 });
 
 export const ScheduleRun: Model<IScheduleRun> = model<IScheduleRun>(
   'ScheduleRun',
