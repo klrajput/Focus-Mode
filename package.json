@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Focus Mode \u2014 distraction lockdown dashboard: React dashboard + Express/MongoDB API + Focus Agent (Electron).",
+  "description": "Focus Mode — distraction lockdown dashboard: React dashboard + Express/MongoDB API + Focus Agent (Electron).",
   "workspaces": [
     "shared",
     "server",
@@ -29,6 +29,7 @@
   "devDependencies": {
     "@playwright/test": "1.65.0",
     "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.1.0",
     "concurrently": "10.0.7",
     "cross-env": "10.1.0",
     "eslint": "10.14.0",
