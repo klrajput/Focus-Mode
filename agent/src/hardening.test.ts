@@ -6,10 +6,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { agentCapabilitiesSchema } from '@focus-mode/shared';
 import { parseAgentEnv } from './config/env.js';
 import { createFocusDriver, FakeDriverNotAllowedError } from './focus/drivers/index.js';
 import { FakeDriver } from './focus/drivers/fake.js';
-import { UnavailableDriver } from './focus/drivers/unavailable.js';
 import { journalEntrySchema, journalWindowRefSchema } from './focus/journal.js';
 import { noopLogger } from './log.js';
 
@@ -136,10 +136,17 @@ describe('driver selection (AGENTS §8)', () => {
     ).toBeInstanceOf(FakeDriver);
   });
 
-  it('reports real window control as unsupported until W3 drivers land', () => {
+  it('selects a real platform driver, never a fake, in a packaged build (W3)', () => {
     const driver = createFocusDriver({ configured: 'real', isPackaged: true, logger: noopLogger });
-    expect(driver).toBeInstanceOf(UnavailableDriver);
-    expect(driver.capabilities().focus).toBe('unsupported');
+    expect(driver.name).not.toBe('fake');
+    const caps = driver.capabilities();
+    expect(agentCapabilitiesSchema.safeParse(caps).success).toBe(true);
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      expect(caps.focus).toBe('full');
+    }
+    if (caps.focus === 'unsupported') {
+      expect((caps.reasons ?? []).length).toBeGreaterThan(0);
+    }
   });
 
   it('defaults to the real driver, never fake', () => {
