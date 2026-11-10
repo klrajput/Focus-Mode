@@ -93,11 +93,6 @@ export function LandingPage() {
                 I already have a Focus Agent
               </Link>
             </div>
-
-            <p className="mt-4 text-[13px] text-muted">
-              W1 placeholder: the complete landing page, installer detection and download buttons
-              land with T-028. The dashboard routes behind Log in are real.
-            </p>
           </section>
 
           <section aria-labelledby="steps-heading" className="min-w-0">
@@ -137,7 +132,7 @@ export function LandingPage() {
             <EmptyState
               icon={Download}
               title="Installer links are being published — check back soon."
-              description="The download links and their versions come from the public /agent-links API. Until an admin publishes them, no fake installer is offered here."
+              description="An admin publishes the macOS, Windows and Linux installers."
             />
           </div>
         </section>

@@ -298,6 +298,87 @@ describe('AgentLink', () => {
     link.dispose();
   });
 
+  it('accepts a challenge that arrives after an unpaired hello (KI-010 re-handshake)', async () => {
+    const sockets: MockSocket[] = [];
+    const attest = vi.fn(async () => 'header.payload.signature-header-payload-signature');
+    const resolveDeviceId = vi.fn(async () => DEVICE_ID);
+    const link = makeLink(sockets, { resolveDeviceId, attest });
+
+    const statuses: AgentConnectionStatus[] = [];
+    const authOks = vi.fn();
+    link.on('status', (event) => statuses.push(event.status));
+    link.on('authOk', authOks);
+
+    link.connect();
+    sockets[0]?.open();
+    // The dashboard connected while the agent was still unpaired.
+    sockets[0]?.receive(HELLO_UNPAIRED);
+    expect(statuses.at(-1)).toBe('IDLE');
+    expect(attest).not.toHaveBeenCalled();
+
+    // The user paired it (dashboard nudge → agent poll): the agent re-issues a challenge here.
+    sockets[0]?.receive(CHALLENGE);
+    await vi.waitFor(() => expect(attest).toHaveBeenCalledWith(DEVICE_ID, NONCE));
+    expect(sockets[0]?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+
+    sockets[0]?.receive(AUTH_OK);
+    await vi.waitFor(() => expect(authOks).toHaveBeenCalledTimes(1));
+    // No reload: the same socket now reports Connected, and getState resyncs the truth.
+    expect(statuses.at(-1)).toBe('PAIRED');
+    expect(link.isAuthenticated()).toBe(true);
+    expect(sockets[0]?.frames().filter((frame) => frame.type === 'getState').length).toBeGreaterThan(
+      1,
+    );
+
+    // A second challenge on the same socket never starts a second attestation.
+    sockets[0]?.receive(CHALLENGE);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(attest).toHaveBeenCalledTimes(1);
+
+    link.dispose();
+  });
+
+  it('asks the agent for running apps with listApps and emits the apps frame', () => {
+    const sockets: MockSocket[] = [];
+    const link = makeLink(sockets);
+    const apps = vi.fn();
+    link.on('apps', apps);
+
+    link.connect();
+    sockets[0]?.open();
+    sockets[0]?.receive(HELLO_UNPAIRED);
+
+    link.requestApps();
+    expect(sockets[0]?.frames().some((frame) => frame.type === 'listApps')).toBe(true);
+
+    sockets[0]?.receive({
+      v: 1,
+      id: 'a-020',
+      type: 'apps',
+      apps: [{ key: 'slack', label: 'Slack', running: true }],
+    });
+    expect(apps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apps: [{ key: 'slack', label: 'Slack', running: true }],
+      }),
+    );
+
+    link.dispose();
+  });
+
+  it('reports whether exitFocus actually left the page', () => {
+    const sockets: MockSocket[] = [];
+    const link = makeLink(sockets);
+
+    expect(link.endFocus(SESSION_ID)).toBe(false);
+
+    link.connect();
+    sockets[0]?.open();
+    expect(link.endFocus(SESSION_ID)).toBe(true);
+
+    link.dispose();
+  });
+
   it('stays silent and stops reconnecting after dispose', () => {
     vi.useFakeTimers();
     const sockets: MockSocket[] = [];

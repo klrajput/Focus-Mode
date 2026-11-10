@@ -6,11 +6,17 @@
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { AgentLinkContext } from '../../agent/agent-link-provider';
 import { AuthContext } from '../../auth/auth-context';
-import { makeAgentLinkValue, makeAuthValue, makeUserWithRole } from '../../test/test-utils';
+import {
+  createTestQueryClient,
+  makeAgentLinkValue,
+  makeAuthValue,
+  makeUserWithRole,
+} from '../../test/test-utils';
 import { AppShell } from './app-shell';
 
 const PRIMARY_LABELS = [
@@ -27,17 +33,19 @@ function renderShell(role: 'USER' | 'ADMIN') {
   const user = makeUserWithRole(role);
 
   return render(
-    <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
-      <AgentLinkContext.Provider value={makeAgentLinkValue()}>
-        <MemoryRouter initialEntries={['/dashboard']}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route path="/dashboard" element={<h1>Dashboard content</h1>} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </AgentLinkContext.Provider>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={createTestQueryClient()}>
+      <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
+        <AgentLinkContext.Provider value={makeAgentLinkValue()}>
+          <MemoryRouter initialEntries={['/dashboard']}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="/dashboard" element={<h1>Dashboard content</h1>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </AgentLinkContext.Provider>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 

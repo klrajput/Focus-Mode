@@ -61,7 +61,7 @@ export function SettingsPage() {
             <CardHeader
               title="Profile"
               titleId="profile-heading"
-              description="Read-only in W1. Editing lands with T-036."
+              description="Profile editing isn't available yet."
             />
             <CardBody>
               <dl className="grid gap-4 sm:grid-cols-2">
@@ -77,7 +77,7 @@ export function SettingsPage() {
               </dl>
               <p className="mt-4 text-[13px] text-muted">
                 Email is managed by your account; changing it needs an admin. Profile editing,
-                password change and unpair-all land with T-036 (W2).
+                password change and unpair-all aren&apos;t available yet.
               </p>
             </CardBody>
           </Card>

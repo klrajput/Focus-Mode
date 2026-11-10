@@ -19,6 +19,7 @@ import {
   localMessageSchema,
   PROTOCOL_VERSION,
   type AgentConnectionStatus,
+  type AppsMessage,
   type AuthErrorMessage,
   type AuthOkMessage,
   type ChallengeMessage,
@@ -66,6 +67,8 @@ export interface AgentLinkEvents {
   focusEnded: FocusEndedMessage;
   focusRejected: FocusRejectedMessage;
   scheduleHeadsUp: ScheduleHeadsUpMessage;
+  /** Answer to `listApps` (REC-007): key + label + running only, never a window title (INV-6). */
+  apps: AppsMessage;
   /** Emitted after a `paired` nudge was attempted; `sent` is false when no socket is open. */
   paired: { sent: boolean };
   authOk: AuthOkMessage;
@@ -99,7 +102,10 @@ export interface AgentLinkClient {
   dispose(): void;
   requestState(): void;
   notifyPaired(): void;
-  endFocus(sessionId?: string): void;
+  /** Returns false when no attested socket is open (the UI must not claim the end was sent). */
+  endFocus(sessionId?: string): boolean;
+  /** Ask the agent which apps are running (`listApps`, REC-007) — never window titles. */
+  requestApps(): void;
   send(message: AgentOutboundMessage): boolean;
   on<K extends keyof AgentLinkEvents>(
     type: K,
@@ -186,6 +192,8 @@ export class AgentLink implements AgentLinkClient {
   private pendingSocket: LinkSocket | null = null;
   private helloMessage: HelloMessage | null = null;
   private authenticated = false;
+  /** One attestation exchange at a time: a re-issued challenge must not race the first one. */
+  private authInFlight = false;
   private disposed = false;
   private portIndex = 0;
   private reconnectDelayMs: number;
@@ -301,13 +309,17 @@ export class AgentLink implements AgentLinkClient {
     this.send({ type: 'getState' });
   }
 
+  requestApps(): void {
+    this.send({ type: 'listApps' });
+  }
+
   notifyPaired(): void {
     const sent = this.send({ type: 'paired' });
     this.emit('paired', { sent });
   }
 
-  endFocus(sessionId?: string): void {
-    this.send(sessionId === undefined ? { type: 'exitFocus' } : { type: 'exitFocus', sessionId });
+  endFocus(sessionId?: string): boolean {
+    return this.send(sessionId === undefined ? { type: 'exitFocus' } : { type: 'exitFocus', sessionId });
   }
 
   // -------------------------------------------------------------------------
@@ -381,6 +393,7 @@ export class AgentLink implements AgentLinkClient {
     this.socket = socket;
     this.helloMessage = null;
     this.authenticated = false;
+    this.authInFlight = false;
     this.reconnectDelayMs = this.reconnectBaseMs;
 
     socket.onopen = null;
@@ -410,6 +423,7 @@ export class AgentLink implements AgentLinkClient {
     this.socket = null;
     this.helloMessage = null;
     this.authenticated = false;
+    this.authInFlight = false;
     if (socket !== null) detach(socket);
     const pending = this.pendingSocket;
     this.pendingSocket = null;
@@ -467,6 +481,9 @@ export class AgentLink implements AgentLinkClient {
         this.emit('state', message);
         this.emitStatus(this.statusFromState(message), 'Your Focus Agent sent its current state.');
         break;
+      case 'apps':
+        this.emit('apps', message);
+        break;
       case 'focusStarted':
         this.emit('focusStarted', message);
         this.emitStatus('FOCUSING', 'A focus session is running on this device.');
@@ -485,7 +502,7 @@ export class AgentLink implements AgentLinkClient {
         this.emit('scheduleHeadsUp', message);
         break;
       default:
-        // `apps`, `paired`, `auth`, `getState`, `enterFocus`, `exitFocus` and `listApps` are not
+        // `paired`, `auth`, `getState`, `enterFocus`, `exitFocus` and `listApps` are not
         // agent → dashboard frames we act on; ignoring them keeps a future agent forward-compatible.
         break;
     }
@@ -498,7 +515,7 @@ export class AgentLink implements AgentLinkClient {
     this.emit('hello', hello);
 
     if (!hello.paired) {
-      // Reachable but not linked to this account: honest IDLE, no attestation to perform.
+      // Reachable but not linked to this account: honest IDLE, no attestation to perform yet.
       this.emitStatus('IDLE', 'Your Focus Agent is running but not paired to this account yet.');
       this.requestState();
       return;
@@ -513,25 +530,37 @@ export class AgentLink implements AgentLinkClient {
     }, this.handshakeTimeoutMs);
   }
 
+  /**
+   * A challenge is the agent's invitation to attest (REC-003). It is deliberately accepted even
+   * when `hello.paired` was false: after a `paired` nudge the agent polls the cloud and re-issues a
+   * challenge to sockets that connected while it was still unpaired (KI-010), so gating on the
+   * original `hello` would leave the badge stuck on "Not paired" until a page reload.
+   */
   private handleChallenge(socket: LinkSocket, challenge: ChallengeMessage): void {
-    if (this.socket !== socket || this.helloMessage?.paired !== true) return;
+    if (this.socket !== socket || this.authenticated || this.authInFlight) return;
     this.clearTimer('challenge');
     void this.authenticate(socket, challenge);
   }
 
   private async authenticate(socket: LinkSocket, challenge: ChallengeMessage): Promise<void> {
+    this.authInFlight = true;
     let deviceId: string | null;
     try {
       deviceId = await this.resolveDeviceId();
     } catch {
+      this.authInFlight = false;
       this.emit('error', { message: 'We could not read the devices linked to this account.' });
       this.emitStatus('IDLE', 'We could not verify this dashboard with your Focus Agent.');
       return;
     }
 
-    if (this.disposed || this.socket !== socket) return;
+    if (this.disposed || this.socket !== socket) {
+      this.authInFlight = false;
+      return;
+    }
 
     if (deviceId === null) {
+      this.authInFlight = false;
       this.emit('error', {
         message: 'No device is linked to this account yet. Pair your Focus Agent on Devices.',
       });
@@ -543,12 +572,16 @@ export class AgentLink implements AgentLinkClient {
     try {
       attestation = await this.attest(deviceId, challenge.nonce);
     } catch {
+      this.authInFlight = false;
       this.emit('error', { message: 'The dashboard could not attest this Focus Agent.' });
       this.emitStatus('IDLE', 'We could not verify this dashboard with your Focus Agent.');
       return;
     }
 
-    if (this.disposed || this.socket !== socket) return;
+    if (this.disposed || this.socket !== socket) {
+      this.authInFlight = false;
+      return;
+    }
 
     this.authTimer = setTimeout(() => {
       this.authTimer = null;
@@ -563,14 +596,15 @@ export class AgentLink implements AgentLinkClient {
     if (this.socket !== socket) return;
     this.clearTimer('auth');
     this.authenticated = true;
+    this.authInFlight = false;
     this.emit('authOk', authOk);
 
-    const paired = this.helloMessage?.paired === true;
-    const status = this.statusFromHello();
-    this.emitStatus(
-      status,
-      paired ? 'Your Focus Agent is connected and attested.' : 'Your Focus Agent is connected.',
-    );
+    // `authOk` proves the pairing binding (REC-003), so the link is Connected even when the
+    // original `hello` arrived before the agent was paired. A following `state` frame is still the
+    // authority for FOCUSING (INV-5).
+    const status: AgentConnectionStatus =
+      this.helloMessage?.state === 'FOCUSING' ? 'FOCUSING' : 'PAIRED';
+    this.emitStatus(status, 'Your Focus Agent is connected and attested.');
 
     // INV-5: always re-sync from agent truth after (re)connect (FR-014).
     this.requestState();
@@ -579,6 +613,7 @@ export class AgentLink implements AgentLinkClient {
   private handleAuthError(message: AuthErrorMessage): void {
     this.clearTimer('auth');
     this.authenticated = false;
+    this.authInFlight = false;
     this.emit('authError', message);
     this.emitStatus(
       'IDLE',
@@ -589,13 +624,6 @@ export class AgentLink implements AgentLinkClient {
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
-
-  private statusFromHello(): AgentConnectionStatus {
-    const hello = this.helloMessage;
-    if (hello === null) return 'DISCONNECTED';
-    if (!hello.paired) return 'IDLE';
-    return hello.state === 'FOCUSING' ? 'FOCUSING' : 'PAIRED';
-  }
 
   private statusFromState(message: StateMessage): AgentConnectionStatus {
     if (message.state === 'FOCUSING') return 'FOCUSING';

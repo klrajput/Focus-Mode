@@ -103,8 +103,8 @@ export function AllowlistPage() {
               )}
 
               <p className="mt-4 text-[13px] text-muted">
-                Allow-list version {allowlist.version}. Editing, manual app add and presets land
-                with T-034 (W2) — this view is read-only today.
+                Allow-list version {allowlist.version}. Editing and adding apps aren&apos;t
+                available yet.
               </p>
             </CardBody>
           </Card>

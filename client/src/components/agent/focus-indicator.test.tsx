@@ -56,25 +56,59 @@ describe('FocusIndicator', () => {
     vi.setSystemTime(NOW);
     renderIndicator();
 
-    const region = screen.getByRole('region', {
+    const bar = screen.getByRole('timer', {
       name: 'Focus session: 1 minute 5 seconds remaining',
     });
-    expect(region).toHaveTextContent('Focusing');
-    expect(region).toHaveTextContent('— 1:05 left');
+    expect(bar).toHaveTextContent('Focusing');
+    expect(bar).toHaveTextContent('— 1:05 left');
 
     act(() => {
       vi.advanceTimersByTime(1000);
     });
 
-    expect(screen.getByRole('region')).toHaveAttribute(
+    expect(screen.getByRole('timer')).toHaveAttribute(
       'aria-label',
       'Focus session: 1 minute 4 seconds remaining',
     );
   });
 
+  it('keeps warning instead of vanishing when the link drops mid-session (F-02)', async () => {
+    const refresh = vi.fn();
+    const liveSession: AgentSessionSummary = {
+      ...SESSION,
+      endsAt: new Date(Date.now() + 65_000).toISOString(),
+    };
+    renderIndicator({ status: 'DISCONNECTED', linkLost: true, refresh, session: liveSession });
+
+    const bar = screen.getByRole('timer');
+    expect(bar).toHaveTextContent('Focusing');
+    expect(bar).toHaveTextContent('Lost contact with your Focus Agent — the session keeps running.');
+    expect(bar.getAttribute('aria-label')).toContain('Focus session: 1 minute');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the countdown in the document title while focusing and restores it afterwards', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    document.title = 'Dashboard — Focus Mode';
+
+    const { unmount } = renderIndicator();
+    expect(document.title).toBe('Focusing — 2 min left — Focus Mode');
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(document.title).toBe('Focusing — 1 min left — Focus Mode');
+
+    unmount();
+    expect(document.title).toBe('Dashboard — Focus Mode');
+  });
+
   it('sends End Focus through the provider', async () => {
     const user = userEvent.setup();
-    const endFocus = vi.fn();
+    const endFocus = vi.fn(() => true);
     renderIndicator({ endFocus });
 
     await user.click(screen.getByRole('button', { name: 'End Focus' }));

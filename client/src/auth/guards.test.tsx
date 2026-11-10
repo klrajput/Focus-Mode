@@ -7,13 +7,19 @@
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { AgentLinkContext } from '../agent/agent-link-provider';
 import { AppShell } from '../components/layout/app-shell';
 import { ForbiddenPage } from '../pages/forbidden';
 import { LoginPage } from '../pages/login';
-import { makeAgentLinkValue, makeAuthValue, makeUserWithRole } from '../test/test-utils';
+import {
+  createTestQueryClient,
+  makeAgentLinkValue,
+  makeAuthValue,
+  makeUserWithRole,
+} from '../test/test-utils';
 import { AuthContext } from './auth-context';
 import { RequireAuth } from './require-auth';
 import { RequireRole } from './require-role';
@@ -37,22 +43,24 @@ function renderAdminRoute(role: 'USER' | 'ADMIN') {
   const user = makeUserWithRole(role);
 
   return render(
-    <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
-      <AgentLinkContext.Provider value={makeAgentLinkValue()}>
-        <MemoryRouter initialEntries={['/admin']}>
-          <Routes>
-            <Route element={<RequireAuth />}>
-              <Route element={<AppShell />}>
-                <Route element={<RequireRole role="ADMIN" />}>
-                  <Route path="/admin" element={<div>admin area</div>} />
+    <QueryClientProvider client={createTestQueryClient()}>
+      <AuthContext.Provider value={makeAuthValue({ status: 'authenticated', user })}>
+        <AgentLinkContext.Provider value={makeAgentLinkValue()}>
+          <MemoryRouter initialEntries={['/admin']}>
+            <Routes>
+              <Route element={<RequireAuth />}>
+                <Route element={<AppShell />}>
+                  <Route element={<RequireRole role="ADMIN" />}>
+                    <Route path="/admin" element={<div>admin area</div>} />
+                  </Route>
+                  <Route path="/403" element={<ForbiddenPage />} />
                 </Route>
-                <Route path="/403" element={<ForbiddenPage />} />
               </Route>
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </AgentLinkContext.Provider>
-    </AuthContext.Provider>,
+            </Routes>
+          </MemoryRouter>
+        </AgentLinkContext.Provider>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
