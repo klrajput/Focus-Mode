@@ -169,7 +169,9 @@ export function StartFocusCard() {
         </p>
 
         {allowlistQuery.isError ? (
-          <p role="status" className="mt-1 text-[13px] text-danger-text">
+          // F-107: a failed allow-list fetch blocks Start, so it must interrupt (alert), not wait
+          // for the next polite turn. Same sentence as before.
+          <p role="alert" className="mt-1 text-[13px] text-danger-text">
             We couldn&apos;t load your allow-list. Check your connection and try again.
           </p>
         ) : null}

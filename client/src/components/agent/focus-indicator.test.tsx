@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import {
@@ -116,5 +116,15 @@ describe('FocusIndicator', () => {
     await user.click(screen.getByRole('button', { name: 'End Focus' }));
 
     expect(endFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the timer semantics off the interactive controls (F-105)', () => {
+    renderIndicator();
+
+    const timer = screen.getByRole('timer');
+    expect(within(timer).queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: 'End Focus' })).toBeInTheDocument();
+    // The bar itself is a landmark so it is never content outside a landmark (axe `region`).
+    expect(screen.getByRole('region', { name: 'Focus session status' })).toContainElement(timer);
   });
 });

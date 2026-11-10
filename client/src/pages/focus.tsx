@@ -7,7 +7,7 @@
  * on time) and shows the ratified "Lost contact" banner with a Reconnect action — F-02.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Timer, WifiOff } from 'lucide-react';
 
@@ -71,7 +71,20 @@ export function FocusPage() {
   }
 
   const deviceName = pairedDeviceName(devicesQuery.data?.items ?? []);
-  const allowListLabels = (allowlistQuery.data?.userApps ?? []).map((app) => app.label);
+  const allowlist = allowlistQuery.data;
+  const allowListLabels = (allowlist?.userApps ?? []).map((app) => app.label);
+
+  // F-103: the count comes from the agent's `listApps` snapshot taken for the consent dialog
+  // (running apps that are not protected or allow-listed). A hard reload on /focus has no
+  // snapshot, so the sentence stays honest without a number instead of guessing zero.
+  const asideCount = useMemo(() => {
+    if (agent.runningApps === null) return null;
+    const keep = new Set([
+      ...(allowlist?.userApps ?? []).map((app) => app.key),
+      ...(allowlist?.protectedApps ?? []).map((app) => app.key),
+    ]);
+    return agent.runningApps.filter((app) => app.running && !keep.has(app.key)).length;
+  }, [agent.runningApps, allowlist]);
 
   return (
     <>
@@ -146,7 +159,9 @@ export function FocusPage() {
                   Stepped aside
                 </h2>
                 <p className="mt-1 text-[15px] text-white">
-                  Minimised, not closed
+                  {asideCount === null
+                    ? 'Minimised, not closed'
+                    : `${asideCount} ${asideCount === 1 ? 'app' : 'apps'} — minimised, not closed`}
                   {agent.lastStartReaside === null
                     ? ''
                     : ` · re-aside: ${agent.lastStartReaside ? 'on' : 'off'}`}

@@ -67,19 +67,28 @@ export function FocusIndicator() {
   if (agent.linkLost) {
     return (
       <div
-        role="timer"
-        aria-label={`Focus session: ${spokenRemaining(secondsLeft)}. ${LINK_LOST_SHORT_COPY}`}
+        role="region"
+        aria-label="Focus session status"
         className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-strong bg-amber-subtle px-4 py-2"
       >
-        <p className="flex min-w-0 items-center gap-2 text-[15px] font-medium text-amber-text">
-          <WifiOff aria-hidden="true" className="h-4 w-4 shrink-0" />
-          <span>Focusing</span>
-          <span className="text-amber-text">— {formatClock(secondsLeft)} left</span>
-          <span className="min-w-0 text-[13px] leading-[1.45] break-words">
-            · {LINK_LOST_SHORT_COPY}
-          </span>
-        </p>
-        <Button variant="secondary" size="sm" onClick={agent.refresh}>
+        {/* F-105 (T-084): `role="timer"` names only the non-interactive countdown, so the live
+            semantics never wrap Reconnect/End Focus — a timer that contains buttons is invalid
+            for screen readers. `region` keeps the bar inside a landmark (axe `region`). */}
+        <div
+          role="timer"
+          aria-label={`Focus session: ${spokenRemaining(secondsLeft)}. ${LINK_LOST_SHORT_COPY}`}
+          className="flex min-w-0 flex-wrap items-center gap-2"
+        >
+          <p className="flex min-w-0 items-center gap-2 text-[15px] font-medium text-amber-text">
+            <WifiOff aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span>Focusing</span>
+            <span className="text-amber-text">— {formatClock(secondsLeft)} left</span>
+            <span className="min-w-0 text-[13px] leading-[1.45] break-words">
+              · {LINK_LOST_SHORT_COPY}
+            </span>
+          </p>
+        </div>
+        <Button variant="secondary" size="md" onClick={agent.refresh}>
           Reconnect
         </Button>
       </div>
@@ -88,16 +97,23 @@ export function FocusIndicator() {
 
   return (
     <div
-      role="timer"
-      aria-label={`Focus session: ${spokenRemaining(secondsLeft)}`}
+      role="region"
+      aria-label="Focus session status"
       className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-base px-4 py-2 text-white"
     >
-      <p className="flex min-w-0 items-center gap-2 text-[15px] font-medium">
+      {/* F-105: timer semantics stay on the countdown text only; the End Focus button is a
+          sibling so no interactive control lives inside a `role="timer"`. */}
+      <p
+        role="timer"
+        aria-label={`Focus session: ${spokenRemaining(secondsLeft)}`}
+        className="flex min-w-0 items-center gap-2 text-[15px] font-medium"
+      >
         <Target aria-hidden="true" className="h-4 w-4 shrink-0 text-focus-on-base" />
         <span>Focusing</span>
         <span className="text-text-on-base-muted">— {formatClock(secondsLeft)} left</span>
       </p>
-      <Button variant="on-base" size="sm" onClick={endFocus}>
+      {/* F-106: `md` gives the 44 px mobile target and the 40 px desktop target (§8). */}
+      <Button variant="on-base" size="md" onClick={endFocus}>
         End Focus
       </Button>
     </div>

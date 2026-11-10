@@ -152,4 +152,26 @@ describe('NotificationBell', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(UNREAD.message)).toBeInTheDocument();
   });
+
+  it('moves focus into the panel and returns it to the bell on Escape (F-109)', async () => {
+    const user = userEvent.setup();
+    installFetch((url) => {
+      if (url.includes('/notifications')) return fakeResponse(pageOf([UNREAD]));
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    renderBell();
+
+    const bell = await screen.findByRole('button', { name: 'Notifications, 1 unread' });
+    await user.click(bell);
+
+    const panel = await screen.findByRole('dialog', { name: 'Notifications' });
+    await waitFor(() => expect(panel).toContainElement(document.activeElement as HTMLElement));
+
+    // Escape closes the dialog and hands focus back to the trigger, not to <body>.
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: 'Notifications' })).not.toBeInTheDocument();
+    expect(bell).toHaveFocus();
+  });
 });

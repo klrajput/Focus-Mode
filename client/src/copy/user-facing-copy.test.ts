@@ -84,10 +84,14 @@ const APPROVED_REPLACEMENTS = [
   'Installer links are being published — check back soon.',
   'These installers are unsigned builds.',
   'No users match your filters.',
+  'No users yet.',
   'No presets yet. Create the first one.',
   'Preset published',
   'Download link updated',
   'A scheduled session starts only while your Focus Agent is connected, and only after a 10-second heads-up you can cancel.',
+  'Use 24-hour HH:mm, for example 09:00.',
+  'No notifications yet.',
+  'Missed scheduled sessions will show up here.',
 ] as const;
 
 describe('user-facing copy (F-01 / C-01 regression)', () => {

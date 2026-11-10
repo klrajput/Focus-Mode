@@ -41,6 +41,10 @@ export function AgentStatusBadge() {
       aria-label={`Focus Agent status: ${view.label}`}
       className="flex min-w-0 items-center gap-2"
     >
+      {/* F-113 / F-08: the wrapper's aria-label is the single announcement source. Hiding the
+          visual icon+text from assistive tech keeps the E2E-visible name
+          `Focus Agent status: …` stable without announcing the label a second time as content.
+          The Disconnected button keeps its own aria-label; only its visual badge is hidden. */}
       {agent.status === 'DISCONNECTED' && !agent.connecting ? (
         <button
           type="button"
@@ -48,14 +52,18 @@ export function AgentStatusBadge() {
           aria-label={`Focus Agent status: ${view.label}. Show connection help`}
           className="rounded-[var(--radius-pill)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none"
         >
+          <span aria-hidden="true" className="contents">
+            <StatusBadge tone={view.tone} icon={view.icon} title={agent.detail}>
+              {view.label}
+            </StatusBadge>
+          </span>
+        </button>
+      ) : (
+        <span aria-hidden="true" className="contents">
           <StatusBadge tone={view.tone} icon={view.icon} title={agent.detail}>
             {view.label}
           </StatusBadge>
-        </button>
-      ) : (
-        <StatusBadge tone={view.tone} icon={view.icon} title={agent.detail}>
-          {view.label}
-        </StatusBadge>
+        </span>
       )}
     </div>
   );

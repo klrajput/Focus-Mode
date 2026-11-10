@@ -43,7 +43,9 @@ function AppChip({ app, onRemove }: { app: AppEntry; onRemove: (app: AppEntry) =
         type="button"
         onClick={() => onRemove(app)}
         aria-label={`Remove ${app.label}`}
-        className="ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-muted hover:bg-danger-subtle hover:text-danger-text focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none"
+        // F-106: 44 px touch target below md, 40 px on desktop (§8). The old 32 px control was
+        // below both minimums even though the label wraps it in a pill.
+        className="ml-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-muted hover:bg-danger-subtle hover:text-danger-text focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none md:h-10 md:w-10"
       >
         <X aria-hidden="true" className="h-4 w-4" />
       </button>
