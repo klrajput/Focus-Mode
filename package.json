@@ -20,7 +20,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace client && npm run build --workspace agent",
-    "dev": "concurrently --names \"server,client,agent\" --prefix-colors \"blue,green,magenta\" \"npm run dev --workspace server\" \"npm run dev --workspace client\" \"npm run dev --workspace agent\""
+    "dev": "concurrently --names \"server,client,agent\" --prefix-colors \"blue,green,magenta\" \"npm run dev --workspace server\" \"npm run dev --workspace client\" \"npm run dev --workspace agent\"",
+    "pretypecheck": "npm run build -w @focus-mode/shared",
+    "pretest": "npm run build -w @focus-mode/shared"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

@@ -41,3 +41,7 @@ npm-debug.log*
 /PLUGINS_AND_TOOLS.md
 /DEEPSEEK_MASTER_PROMPT.md
 /DEVELOPMENT_HANDOVER.md
+
+# Agent/tooling scratch (concurrent workers, headless smoke profiles)
+.tmp/
+.ghcache/
