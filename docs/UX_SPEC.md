@@ -500,10 +500,10 @@ Pair dialog (440 px, modal)              Unpair confirm (400 px)
 
 ## 5. Consent modal — exact copy (FR-009, before **every** start)
 
-Single **Confirm** button, no checkbox; no `enterFocus` before Confirm; Cancel/Escape/backdrop = cancel; scrollable body with sticky footer at 360 px. `ConsentModal.tsx` (T-056) — copy verbatim, `{placeholders}` from the selected duration/device/allow-list.
+Single **Confirm** button, no checkbox; no `enterFocus` before Confirm; Cancel/Escape/backdrop = cancel; scrollable body with sticky footer at 360 px. `ConsentModal.tsx` (T-056) — copy verbatim, `{placeholders}` from the selected duration/device/allow-list. The title below is **E2E-locked** (`e2e/focus.spec.ts` matches it) and was ratified in the W4/W5 review (§13.3 R2).
 
 ```
-Title:   Start a {duration} focus session?
+Title:   Start a {duration}-minute focus session?
 Summary: This is exactly what will happen on {deviceName}. You can end it at
          any time.
 
@@ -536,9 +536,10 @@ SECTION — You can end focus any time
 Fine print: Focus starts only after you confirm. This summary is shown before
 every session. The Focus Agent never moves a window without your consent.
 
-First run on this device only (append above footer):
-  First time on this device: your Focus Agent will also ask you to allow
-  this in its own window.
+First run — AGENT-SIDE ONLY in v1 (ratified §13.3 R1):
+  The dashboard cannot read the Focus Agent's stored consent (it is agent-local,
+  §5.1/§7.1), so this modal makes no first-run claim. The native dialog in §5.1
+  is the first-run gate; the agent window shows the stored status.
 
 Footer:  [ Cancel ]                      [ Confirm — start focus ]
 ```
@@ -854,3 +855,110 @@ Also: `min-w-0` on flex/grid children; long values `truncate` + `title`; no `whi
 - **Behavioural claims** — the 42 unit tests cover components and the link/session data path with mocks; pairing → focus → end against a real agent is still unproven by this review (T-093 E2E, Phase 8 manual).
 - **Deferred areas** — §4.3 dashboard Today, §4.4 session UI, §4.5 download actions, §4.6 editor/presets, §4.7 CRUD, §4.9 edit/password/unpair-all, §4.10 tabs/search/actions, §7 agent window/tray are **unverified**, not passing; re-review them at the W3/W4 gate.
 - **Spec deltas applied by this review:** §3 badge table + FocusIndicator paragraph, §4.11, §6.2 (login 401 row + local-channel table), §6.3, §8 FocusIndicator row, §11 resolved questions. No other normative text changed.
+
+---
+
+## 13. W4/W5 implementation review (A3)
+
+> **Task:** task-37 / W5-UX (branch `feat/a3-w5-review`) · **Method:** read-only review of the working tree; A3 edited only this document. No source edits, no git.
+> **Snapshot: 2026-11-10 22:47–22:48 IST.** W4 pages (`dashboard`, `allowlist`, `schedules`) mtime 22:07; `/focus` 21:29. **W5 is in flight and landed while this review was written:** `notification-bell.tsx`, `app-shell.tsx`, `insights.tsx` + `components/insights/focus-chart.tsx` at 22:46; `settings.tsx` was rewritten to 583 lines at 22:47 *after* the 121-line read-only version I inspected. `admin.tsx` and `landing.tsx` were still the pre-W5 versions (21:29) when inspected. Every W5 item is **PENDING**, never PASS; each row states exactly what was on disk when inspected, and all W5 rows must be re-reviewed after the merge (F-112).
+> **Evidence:** 20 client test files / **125 tests passed**, incl. the F-01 copy guard (`copy/user-facing-copy.test.ts`, 5 tests); 45/45 colour tokens identical to §1.4; `grep` → 0 raw hex in `*.tsx`; rendered-string jargon sweep → 0 (all `W1/T-0xx` hits are comments). W4 state tests: dashboard 6, allowlist 15, schedules 10, focus 6, consent 5, start-card 7. E2E specs (`focus`, `schedule`, `session-reporting`, `pairing`, `smoke`, `api-sessions`) were read for copy coupling.
+> **Vocabulary:** **PASS** = merged W4 area conforms · **DRIFT** = differs from this spec (action or ratification) · **PENDING** = not yet on disk or W5 in flight — not a defect and never a pass.
+
+### 13.1 Checklist
+
+| # | Area | Spec ref | Result | Note / evidence |
+|---|---|---|---|---|
+| 1 | `/dashboard` real widgets | §4.3 | **PASS** | Start + Today + Recent sessions, per-widget loading / empty / error + Retry / success; today window from the user's local day; no invented numbers. |
+| 2 | `/dashboard` Today card completeness | §4.3 wireframe | **DRIFT (LOW)** | Streak is not shown on the dashboard (it lives on `/insights`). Add with T-071 wiring or accept (R5). |
+| 3 | `StartFocusCard` + `DurationChips` | §4.3, §5, FR-007 | **PASS** | 25/50/60 + custom 1–480 with `aria-pressed`; every blocked case has a visible reason bound by `aria-describedby`; no dead click; F-01-approved sentence rendered. |
+| 4 | Start with allow-list not loaded | §4.3, §5, FR-020 | **DRIFT (MED)** | Start is enabled while the allow-list query is pending/failed; `enterFocus` then sends `userApps: []` and the modal claims "none yet" when the truth is "unknown". Fix F-101. |
+| 5 | `ConsentModal` copy + structure | §5, FR-009 | **PASS** | Five sections, duration row, fine print and the single `Confirm — start focus` are verbatim; title carries the ratified `-minute` form (R2); first-run sentence is agent-side only (R1). |
+| 6 | Consent gate semantics | §5, FR-009 | **PASS** | Nothing is sent before Confirm (E2E asserts no ACTIVE session pre-confirm); Escape/backdrop cancel; re-aside toggle default ON. |
+| 7 | `/focus` live session view | §4.4, §10.4 | **PASS** | Ring counts from `endsAt`; `role="img"` sentence; polite live region at minute + 30 s/10 s; End Focus 48 px; ended summary; loading + empty states; F-02 "Lost contact" banner with retained session verified in tests. |
+| 8 | `/focus` stepped-aside summary | §4.4 wireframe | **DRIFT (LOW)** | Shows "Minimised, not closed · re-aside: on" but omits the app count the wireframe asks for. Fix F-103. |
+| 9 | Focus ring visual tokens | §1.3 | **DRIFT (LOW)** | `strokeWidth=4` in a 120-unit viewBox ≈ 7 px at 220 px vs the §1.3 10 px token (visual only). Fix F-104 or ratify (R7). |
+| 10 | `FocusIndicator` | §3, §10.7 | **PASS** | Sticky top bar; connected + link-lost states; remaining time; End Focus; `document.title` cue; never vanishes mid-session. |
+| 11 | `FocusIndicator` live semantics | §10 | **DRIFT (LOW)** | The `role="timer"` wrapper contains the Reconnect/End Focus buttons. Fix F-105 (T-084). |
+| 12 | `/allowlist` locked protected rows | §4.6, INV-3 | **PASS** | Lock icon + "Protected" text badge, no remove/edit control; test asserts the control's absence. |
+| 13 | `/allowlist` editor, presets, add dialog | §4.6, FR-020, REC-007 | **PASS** | Remove/add via PUT, merge/replace presets with confirmation, 50-app limit reason, running-apps picker (labels only), `PROTECTED_ENTRY` inline; 15 state tests. |
+| 14 | `/allowlist` chip remove target | §8 | **DRIFT (LOW)** | 32×32 px remove button < 40/44 px. Fix F-106. |
+| 15 | `/schedules` CRUD + timezone | §4.7, FR-012 | **PASS** | Create/edit/toggle (switch role)/delete + confirm; next-run line; "no Focus Agent" warning; four states; 10 tests. |
+| 16 | `/schedules` validation copy | §6.1 | **DRIFT (LOW)** | `startTime` surfaces the raw shared message "startTime must be 24-hour HH:mm…". Fix F-102. |
+| 17 | Copy deck / no internal jargon | §6.1 | **PASS** | F-01 fix verified by the regression test + manual sweep: no rendered `W#`/`T-0xx`/`read-only in W` copy anywhere. |
+| 18 | Colour tokens / contrast intent | §1, §2 | **PASS** | 45/45 tokens identical; 0 raw hex in `*.tsx`; fills/text use audited pairs; raw `danger` appears only as an icon on `danger-subtle` (4.41:1 ≥ 3:1 graphic). |
+| 19 | NFR-007 on W4 pages | §4.x, §6.1 | **PASS** | Loading skeletons (static), empty, error (`role="alert"` + Retry + muted code) and success per card/widget; proven by the page tests. |
+| 20 | 360 px on W4 pages | §8 | **PASS** (static) | `flex-wrap` / `min-w-0` / `break-words` throughout; dialogs are full-width bottom sheets; no fixed width exceeds the viewport. Formal Playwright viewport spec still missing (F-110). |
+| 21 | Error/toast copy | §6.2 | **PASS** | `copyForError` used for mutations; error refs muted; errors `role="alert"` except F-107. |
+| 22 | Badge vocabulary | §3 | **PASS** | Session Active/Completed/Cancelled; device Connected/Disconnected/Focusing; schedule Enabled/Disabled as a switch + badge; notification read state as text. |
+| 23 | W2 fix carry-over (§12.4) | — | **PASS** (partial) | F-01 fixed (test-enforced), F-02 fixed, F-03 fixed, F-04 fixed, F-06 fixed (desktop 40 px). Still open: F-05 (W5 insights), F-07 (downloads), F-08 (T-084), F-09 (W5 landing). |
+| 24 | `/insights` | §4.8 | **PENDING** | W5 file landed at 22:46 mid-review: metrics + range tabs + `FocusChart` (Recharts) with `aria-hidden` bars, an `sr-only` summary sentence and a `<details>` table alternative — looks conformant, but **not PASS until W5 merge**. Old F-05 (card rows vs scroll) may now be moot: the visible table is inside a disclosure; verify at merge. |
+| 25 | `/settings` | §4.9 | **PENDING** | The inspected version (121 lines, 21:29) was still read-only (profile/password/unpair-all/downloads absent). It was rewritten to 583 lines at 22:47 while this review was being written, so the new editor + downloads UI is **not reviewed** — verify at merge. |
+| 26 | `/admin` | §4.10 | **PENDING** | Snapshot is users-list-only (no tabs/search/pagination/actions/presets/agent links/stats); admin hooks appeared at 22:47. Empty copy mentions filters that do not exist yet (F-108). |
+| 27 | `/landing` | §4.1 | **PENDING** | Snapshot hero/steps/promise are real but installer links, `How it works`/`Download` nav anchors and footer links are missing (T-076). |
+| 28 | Notifications bell + panel | §3, FR-025 | **PENDING** (in flight) | `notification-bell.tsx` + `use-notifications.ts` + header mount landed 22:46. Current file has four states, unread count derived from data (no invented number), bell `aria-label` includes the count, no notifications → "No notifications yet. Missed scheduled sessions will show up here." Not PASS until W5 merge; one a11y note F-109. |
+| 29 | Installer/download actions | §4.5, §4.9, §6.4, F-07 | **PENDING** | At inspection time (devices 21:29, settings 21:29 version) there was no `Download` button on the `/devices` card and none in `/settings`; `components/settings/download-links.tsx` and agent-link hooks were appearing during the review, so downloads may be landing now (T-072/T-076/T-122). |
+| 30 | E2E copy locks | §5, §6 | **PASS** (read, not run) | E2E depends on: consent dialog name `Start a {n}-minute focus session?`, headings "These stay open" / "You can end focus any time", `Confirm — start focus`, "Agent connected", "Device unpaired", "No device connected — start your Focus Agent", "Focus Agent status: ", "Focus started", "Focus ended — your windows are back.". Do not reword these. |
+
+### 13.2 Copy drift list (exact old → new)
+
+Rendered-string drifts found in merged W4 code: **5** (1 MED, 4 LOW), plus 1 comment-only housekeeping item.
+
+| ID | File:line | Current (rendered) | Replace with | Severity |
+|---|---|---|---|---|
+| C-101 | `components/focus/start-focus-card.tsx:68, 87–99, 151–155` | Start enabled while allow-list is unknown; consent modal says "Your allow-listed apps: none yet" | Disable Start while the allow-list query is pending/error; reason: "Your allow-list couldn't be loaded. Retry before starting focus." | **MED** |
+| C-102 | `components/schedules/schedule-dialog.tsx:186–194` | "startTime must be 24-hour HH:mm, e.g. 09:00" | "Use 24-hour HH:mm, for example 09:00." | LOW |
+| C-103 | `pages/focus.tsx:144–154` | "Minimised, not closed · re-aside: on" | "Stepped aside: {n} apps — minimised, not closed · re-aside: on" (§4.4) | LOW |
+| C-104 | `components/focus/consent-modal.tsx:110–200` | (no first-run sentence) | No string change if R1 is ratified; otherwise add the conditional line above the footer | LOW |
+| C-105 | `pages/admin.tsx:67–73` | "No users match your filters." | "No users yet." until T-074 adds real filters | LOW |
+| C-106 | `copy/errors.ts:32–38` | Comment calls `LOGIN_REJECTED_COPY` "PROVISIONAL" | Comment: ratified in §12.4 D1 (non-user-facing) | INFO |
+
+### 13.3 Ratification decisions for A0
+
+| ID | Decision | Recommendation / rationale |
+|---|---|---|
+| **R1** | First-run sentence in the dashboard consent modal | **Ratify omission.** The agent's stored consent is agent-local (§5.1/§7.1), so the page cannot honestly say "first time on this device"; the native dialog is the true first-run gate and the agent window shows the stored status. §5 amended. If A0 wants the page to show it, add `consentGranted` to `hello` — an A2 contract change, not W5. |
+| **R2** | Consent title word order | **Ratify** "Start a {duration}-minute focus session?" (natural English; E2E-locked). §5 amended. |
+| **R3** | `/focus` "Stays open" content | **Ratify** fixed categories ("All web browsers · The Focus Agent · System essentials") + the user's allow-list labels. The dashboard must not invent an OS app inventory; this matches §5 wording. |
+| **R4** | Extra operational copy in W4 pages | **Ratify** the additions: "Needs a connected Focus Agent to start. Missed runs appear in notifications, not here.", "Removing an app takes effect the next time focus starts.", "{n} of 50 apps", delete/replace confirmation sentences. All §6.1-compliant. |
+| **R5** | Dashboard streak | **Accept for W4**, add when the insights query is wired (`T-071`) — or leave on `/insights`; not a wave blocker. |
+| **R6** | Notification copy (new strings) | **Approve** "No notifications yet.", "Missed scheduled sessions will show up here.", "All read", "{n} unread". §6.1-compliant; add to the copy deck when W5 merges. |
+| **R7** | Focus-ring stroke via viewBox units | **Ratify the visual** (scales with the ring, never overflows 360 px) or fix F-104 in T-084 polish; no a11y impact. |
+
+### 13.4 Ordered fix list for A4/A8
+
+| Order | ID | Owner | File:line | Fix |
+|---|---|---|---|---|
+| 1 | **F-101** | A4 | `components/focus/start-focus-card.tsx:68, 87–99, 151–155` | Block Start while the allow-list is pending/error; visible reason + `role="alert"` for the fetch error (C-101). Safety-adjacent: prevents starting with an unknown allow-list. |
+| 2 | F-102 | A4 | `components/schedules/schedule-dialog.tsx:71–79, 186–194` | Friendly `startTime` error via `displayError` (C-102). |
+| 3 | F-103 | A4 | `pages/focus.tsx:144–154` | Add the stepped-aside count from the agent's `listApps` snapshot (C-103). |
+| 4 | F-104 | A4 | `components/focus/focus-ring.tsx:34–52` | Derive stroke width from `--fm-ring-stroke-*` or document viewBox scaling in §1.3 (R7). |
+| 5 | F-105 | A4 | `components/agent/focus-indicator.tsx:67–104` | Replace wrapper `role="timer"` with `region`/`status` around non-interactive content; keep actions outside live semantics (T-084). |
+| 6 | F-106 | A4 | `pages/allowlist.tsx:42–49`; `components/agent/focus-indicator.tsx:100` | ≥44 px mobile / ≥40 px desktop targets for `AppChip` remove and the indicator's `End Focus` (`sm` = 40 px). |
+| 7 | F-107 | A4 | `components/focus/start-focus-card.tsx:151–155` | Use `role="alert"` for the allow-list fetch error (currently `role="status"`). |
+| 8 | F-108 | A4 | `pages/admin.tsx:67–73` | Empty copy "No users yet." until filters exist; T-074 restores filter wording (C-105). |
+| 9 | F-109 | A4 | `components/layout/notification-bell.tsx:126–202` | Popover declares `role="dialog"` but does not move focus into it or trap it; move focus into the panel on open (or use non-modal menu semantics) (T-084). |
+| 10 | **F-110** | A8/A9 | `e2e/` (new spec) | Add the NFR-006 viewport spec: 360×740, 768×1024, 1440×900, assert `document.documentElement.scrollWidth <= clientWidth` on every route (T-085). No viewport spec exists (grep `scrollWidth|setViewportSize` in `e2e/` → 0). |
+| 11 | F-111 | A4 | `copy/errors.ts:32–38` | Update the stale "PROVISIONAL" comment (C-106). |
+| 12 | F-112 | A4/A3 | §13.1 rows 24–29 | After the W5 merge, re-review insights / settings / admin / landing / notifications / downloads; re-run the copy guard and check the mobile chart/table. |
+| 13 | F-113 | A4 | `components/agent/agent-status-badge.tsx:38–42` | F-08 carry: `aria-label` + live child text can double-announce; keep the `Focus Agent status: …` name stable (E2E depends on it) (T-084). |
+
+### 13.5 W5 items on disk as PENDING — verify after merge
+
+| Area | Must be true | Files |
+|---|---|---|
+| `/insights` | Recharts chart keeps the `sr-only` summary + `<details>` table alternative; empty copy; 360 px layout; range switch `aria-busy` | `pages/insights.tsx`, `components/insights/focus-chart.tsx` |
+| `/settings` | Profile edit, password change, unpair-all (confirm), installer download buttons; validation + success toasts; start-at-login stays agent-side | `pages/settings.tsx`, `components/settings/download-links.tsx`, `hooks/use-account.ts` |
+| `/admin` | Tabs Users/Presets/Agent links/Stats; search + pagination; deactivate/reactivate; no per-user session detail; aggregate stats only | `pages/admin.tsx` + `hooks/use-admin-*` |
+| `/landing` | Real installer links from `/agent-links` (no invented versions), `How it works` + `Download` anchors, footer links | `pages/landing.tsx` |
+| Notifications | Four states, unread count from data, panel keyboard handling (F-109); no fake badge | `components/layout/notification-bell.tsx` |
+| Downloads | `Download Focus Agent` on the device card and in settings (§4.5/§6.4, F-07) | `pages/devices.tsx`, `pages/settings.tsx` |
+| Quality gates | Copy guard green, axe 0 serious/critical (T-084), viewport E2E (F-110) | `e2e/`, client tests |
+
+### 13.6 Limits of this review
+
+- The W5 target is a **moving working tree** (at least five W5 files landed while this section was being written, including a full `/settings` rewrite after inspection). Only the W4 pages are merged and can be called PASS; W5 rows are deliberately PENDING and the in-flight observations are not verdicts.
+- No real-browser checks were run: the 360 px verdict is static analysis; the `scrollWidth` assertion is F-110.
+- No axe run (T-084), no E2E execution; the E2E copy coupling was read from the specs, not executed.
+- W2 fixes verified present: F-01, F-02, F-03, F-04, F-06. Open by design: F-05 → W5 (partly moot), F-07 → downloads, F-08 → T-084, F-09 → W5 landing.
+- Spec deltas applied by this review: **§5 only** (ratified consent title + first-run paragraph). Everything else is recorded in §13 and needs no normative change.
