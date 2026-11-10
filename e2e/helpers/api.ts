@@ -327,3 +327,85 @@ export async function putAllowlist(
   });
   return unwrap<ApiAllowList>(response, 200);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Schedules + notifications (INTEGRATION_CONTRACTS §3.1 #17–#20, #22; FR-012/FR-025, DEC-021) — the
+// scheduled-session E2E creates a real schedule through the API and reads the missed-run notification.
+// ---------------------------------------------------------------------------------------------
+
+/** `schedule` object shape (contract §3.3). */
+export interface ApiSchedule {
+  id: string;
+  name: string;
+  days: number[];
+  startTime: string;
+  durationMin: number;
+  enabled: boolean;
+  lastRunAt: string | null;
+  createdAt: string;
+}
+
+/** `notification` object shape (contract §3.3). */
+export interface ApiNotification {
+  id: string;
+  type: string;
+  message: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
+/** POST /schedules — 201 schedule (contract §3.1 #18). */
+export async function createSchedule(
+  request: APIRequestContext,
+  accessToken: string,
+  input: {
+    name: string;
+    days: number[];
+    startTime: string;
+    durationMin: number;
+    enabled?: boolean;
+  },
+): Promise<ApiSchedule> {
+  const response = await request.post(`${API_BASE_URL}/schedules`, {
+    headers: bearer(accessToken),
+    data: input,
+  });
+  return unwrap<ApiSchedule>(response, 201);
+}
+
+/** GET /schedules — the account's schedules (contract §3.1 #17). */
+export async function listSchedules(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<ApiPaginated<ApiSchedule>> {
+  const response = await request.get(`${API_BASE_URL}/schedules`, {
+    headers: bearer(accessToken),
+    params: { limit: 100 },
+  });
+  return unwrap<ApiPaginated<ApiSchedule>>(response, 200);
+}
+
+/** DELETE /schedules/:id — cleanup helper (contract §3.1 #20). */
+export async function deleteSchedule(
+  request: APIRequestContext,
+  accessToken: string,
+  scheduleId: string,
+): Promise<{ id: string }> {
+  const response = await request.delete(
+    `${API_BASE_URL}/schedules/${encodeURIComponent(scheduleId)}`,
+    { headers: bearer(accessToken) },
+  );
+  return unwrap<{ id: string }>(response, 200);
+}
+
+/** GET /notifications — missed-run alerts (contract §3.1 #22, FR-025). */
+export async function listNotifications(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<ApiPaginated<ApiNotification>> {
+  const response = await request.get(`${API_BASE_URL}/notifications`, {
+    headers: bearer(accessToken),
+    params: { limit: 100 },
+  });
+  return unwrap<ApiPaginated<ApiNotification>>(response, 200);
+}

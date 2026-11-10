@@ -6,7 +6,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEntry, CloudMessage, ScheduleDueMessage } from '@focus-mode/shared';
-import { FocusRejectedError, type EnterFocusRequest, type FocusSnapshot } from '../focus/controller.js';
+import {
+  FocusRejectedError,
+  type EnterFocusRequest,
+  type FocusSnapshot,
+} from '../focus/controller.js';
 import type { Logger } from '../log.js';
 import { ScheduleFlow, SCHEDULE_CONSENT_VERSION, type ScheduleFlowOptions } from './flow.js';
 import type { PendingRun } from './heads-up.js';
@@ -28,7 +32,12 @@ const SLACK: AppEntry = { key: 'slack', label: 'Slack', mac: ['com.tinyspeck.sla
 type LogFn = (message: string, ...meta: readonly unknown[]) => void;
 
 function quietLogger(): Logger {
-  return { error: vi.fn<LogFn>(), warn: vi.fn<LogFn>(), info: vi.fn<LogFn>(), debug: vi.fn<LogFn>() };
+  return {
+    error: vi.fn<LogFn>(),
+    warn: vi.fn<LogFn>(),
+    info: vi.fn<LogFn>(),
+    debug: vi.fn<LogFn>(),
+  };
 }
 
 function due(overrides: Partial<ScheduleDueMessage> = {}): ScheduleDueMessage {
@@ -137,7 +146,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const flow = new ScheduleFlow({
     baseUrl: BASE_URL,
     headsUpMs: options.headsUpMs ?? HEADS_UP_MS,
-    getDeviceToken: () => options.deviceToken === undefined ? DEVICE_TOKEN : options.deviceToken,
+    getDeviceToken: () => (options.deviceToken === undefined ? DEVICE_TOKEN : options.deviceToken),
     getCapabilities: () => ({ focus: options.capabilities ?? 'full' }),
     isFocusing: () => options.focusing ?? false,
     enterFocus,
@@ -279,7 +288,9 @@ describe('timeout → allow-list → SCHEDULE session', () => {
 
     // session.started is the controller lifecycle's job (one report path, no duplicates).
     expect(harness.sent).toHaveLength(0);
-    expect(harness.started).toEqual([{ pending: expect.objectContaining({ runId: RUN_ID }), sessionId: SESSION_ID }]);
+    expect(harness.started).toEqual([
+      { pending: expect.objectContaining({ runId: RUN_ID }), sessionId: SESSION_ID },
+    ]);
     expect(harness.failures).toHaveLength(0);
   });
 
@@ -293,7 +304,11 @@ describe('timeout → allow-list → SCHEDULE session', () => {
     expect(harness.fetches).toHaveLength(0);
     expect(harness.requests).toHaveLength(0);
     expect(harness.failures).toEqual([
-      { pending: expect.objectContaining({ runId: RUN_ID }), reason: 'NOT_PAIRED', detail: expect.any(String) },
+      {
+        pending: expect.objectContaining({ runId: RUN_ID }),
+        reason: 'NOT_PAIRED',
+        detail: expect.any(String),
+      },
     ]);
     expect(harness.logger.error).toHaveBeenCalledWith(
       expect.stringContaining('no focus was applied'),

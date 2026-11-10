@@ -5,9 +5,9 @@
 // (API-seeded account → real Electron agent → Pair dialog → `POST /devices/pair` → agent polls its
 // token → real EdDSA attestation) and returns the live handles.
 // Invariants: no mocks (real API + real Electron + FakeDriver); the DEC-013 demo devices are
-// unpaired first so the dashboard's `GET /devices` attestation target is the agent under test;
-// one reload is performed because the badge-refresh gap is still open (KI-010) — remove it when A4
-// ships the fix, the rest of the flow is unaffected.
+// unpaired first so the dashboard's `GET /devices` attestation target is the agent under test.
+// No page reload is needed: KI-010 is fixed — the agent re-issues `hello {paired:true}` + a fresh
+// challenge to connected dashboards, so the badge flips to `Connected` live (verified W4).
 // Callers MUST `await fixture.agent.close()` (or let the helper clean up on failure) in a finally block.
 
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
@@ -15,7 +15,7 @@ import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { launchAgent, type LaunchedAgent } from './agent';
 import { listDevices, loginUser, revokeDevice, type ApiDevice } from './api';
 import { signInViaUi } from './auth';
-import { CLIENT_ORIGIN, DEMO_USER } from './config';
+import { DEMO_USER } from './config';
 
 export interface PairedAgentFixture {
   readonly agent: LaunchedAgent;
@@ -61,9 +61,7 @@ export async function pairAgentViaUi(
     if (device === undefined)
       throw new Error('pairing succeeded but GET /devices returned no device');
 
-    // KI-010: the dashboard does not re-handshake after a pairing change yet, so reload once to
-    // reach the attested "Connected" state this fixture promises to callers.
-    await page.goto(`${CLIENT_ORIGIN}/devices`);
+    // KI-010 fixed: the live badge reaches `Connected` without any page reload.
     await expect(page.getByRole('status', { name: 'Focus Agent status: Connected' })).toBeVisible({
       timeout: 30_000,
     });

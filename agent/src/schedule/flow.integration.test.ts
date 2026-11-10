@@ -34,7 +34,12 @@ const HEADS_UP_MS = 10_000;
 type LogFn = (message: string, ...meta: readonly unknown[]) => void;
 
 function quietLogger(): Logger {
-  return { error: vi.fn<LogFn>(), warn: vi.fn<LogFn>(), info: vi.fn<LogFn>(), debug: vi.fn<LogFn>() };
+  return {
+    error: vi.fn<LogFn>(),
+    warn: vi.fn<LogFn>(),
+    info: vi.fn<LogFn>(),
+    debug: vi.fn<LogFn>(),
+  };
 }
 
 function due(overrides: Partial<ScheduleDueMessage> = {}): ScheduleDueMessage {

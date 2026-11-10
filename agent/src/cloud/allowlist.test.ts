@@ -85,7 +85,10 @@ describe('fetchAgentAllowList — contract C-20', () => {
       deviceToken: DEVICE_TOKEN,
       fetchImpl,
     });
-    expect(result).toEqual({ ok: true, allowList: { protectedApps: [], userApps: [], version: 0 } });
+    expect(result).toEqual({
+      ok: true,
+      allowList: { protectedApps: [], userApps: [], version: 0 },
+    });
   });
 
   it('classifies a 401 as an honest UNAUTHENTICATED failure (never an empty allow-list)', async () => {

@@ -18,7 +18,12 @@ const ENDED_AT = '2026-11-10T11:05:00.000Z';
 type LogFn = (message: string, ...meta: readonly unknown[]) => void;
 
 function quietLogger(): Logger {
-  return { error: vi.fn<LogFn>(), warn: vi.fn<LogFn>(), info: vi.fn<LogFn>(), debug: vi.fn<LogFn>() };
+  return {
+    error: vi.fn<LogFn>(),
+    warn: vi.fn<LogFn>(),
+    info: vi.fn<LogFn>(),
+    debug: vi.fn<LogFn>(),
+  };
 }
 
 /** Records messages and can pretend the cloud link is down (`online = false`). */
@@ -33,9 +38,11 @@ class RecordingTransport implements SessionReportTransport {
   }
 }
 
-function makeReporter(
-  options: { online?: boolean; maxQueued?: number } = {},
-): { reporter: SessionReporter; transport: RecordingTransport; logger: Logger } {
+function makeReporter(options: { online?: boolean; maxQueued?: number } = {}): {
+  reporter: SessionReporter;
+  transport: RecordingTransport;
+  logger: Logger;
+} {
   const transport = new RecordingTransport();
   transport.online = options.online ?? true;
   const logger = quietLogger();

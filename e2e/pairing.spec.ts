@@ -18,12 +18,9 @@
 //   2. KI-009: `AGENT_HEADLESS=1` creates no renderer window, so the 6-digit code can only be read
 //      from the agent's real window; the helper launches with `AGENT_HEADLESS=0` (a display is
 //      required — local macOS is fine, Linux CI needs `xvfb-run`).
-//   3. The badge/handshake needs one page load after pairing: the dashboard's local `AgentLink`
-//      connected while the agent was still unpaired, and the agent only re-issues a challenge to
-//      sockets that are not yet authenticated (contract §4.4); the current client ignores a
-//      challenge that arrives after an unpaired `hello`, so the spec records the pre-reload badge
-//      (see the logged line) and then reloads to exercise the attested handshake end to end. The
-//      observed behaviour is tracked in docs/KNOWN_ISSUES.md (KI-010).
+//   3. KI-010 is FIXED (W4): the agent re-issues `hello {paired:true}` + a fresh challenge to already
+//      connected dashboards and closes authenticated sockets on unpair (1008), so the persistent
+//      badge flips `Connected` / `Disconnected` live — this spec asserts that WITHOUT any reload.
 
 import { expect, test, type Page } from '@playwright/test';
 
@@ -117,15 +114,15 @@ test.describe('Pairing: dashboard ↔ Focus Agent', () => {
         await expect(deviceRow(page, pairedDevice.name)).toBeVisible({ timeout: 15_000 });
       });
 
-      const badgeAfterPairing = await agentBadge(page).getAttribute('aria-label');
-      console.log(`[pairing] badge after pairing, before reload: ${badgeAfterPairing}`);
-
-      await test.step('the attested handshake flips the persistent badge to Connected', async () => {
+      await test.step('the attested handshake flips the persistent badge to Connected (no reload)', async () => {
         // REC-003: the dashboard asks the API for a 60 s attestation and the agent verifies it.
-        await page.reload();
+        // KI-010 fixed: the agent re-hellos/challenges connected dashboards, so this is live.
         await expect(
           page.getByRole('status', { name: 'Focus Agent status: Connected' }),
         ).toBeVisible({ timeout: 30_000 });
+        console.log(
+          `[pairing] badge after pairing, NO reload: ${await agentBadge(page).getAttribute('aria-label')}`,
+        );
         await expect(deviceRow(page, pairedDevice.name)).toBeVisible();
       });
 
@@ -147,14 +144,13 @@ test.describe('Pairing: dashboard ↔ Focus Agent', () => {
           })
           .toBe(0);
 
-        const badgeAfterUnpair = await agentBadge(page).getAttribute('aria-label');
-        console.log(`[pairing] badge after unpair, before reload: ${badgeAfterUnpair}`);
-
-        // The revoked agent has no device token anymore: after a reload it can only report IDLE.
-        await page.reload();
+        // KI-010 fixed: unpair closes the authenticated sockets (1008) and the badge drops live.
         await expect(
           page.getByRole('status', { name: 'Focus Agent status: Connected' }),
         ).toHaveCount(0, { timeout: 20_000 });
+        console.log(
+          `[pairing] badge after unpair, NO reload: ${await agentBadge(page).getAttribute('aria-label')}`,
+        );
         await expect(page.getByText('No device connected — start your Focus Agent')).toBeVisible({
           timeout: 20_000,
         });

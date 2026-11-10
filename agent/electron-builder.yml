@@ -36,6 +36,19 @@ asarUnpack:
 # project, so an Electron-header rebuild would fail — keep the shipped prebuilt binaries.
 npmRebuild: false
 
+# Merged into the app metadata used by the builders. Needed because electron-builder cannot
+# infer the repository from .git/config in this npm-workspaces layout (projectDir is agent/):
+#  * `homepage` is required by the Linux deb target and is used by NSIS uninstall links
+#    (second W4 dispatch failed deb with "Please specify project homepage" after the AppImage
+#    itself built fine);
+#  * `author.name`/`author.email` silence the "author is missed in the package.json" warning and
+#    give fpm/NSIS a publisher identity (agent/package.json is A7-owned, so we do not edit it).
+extraMetadata:
+  homepage: https://github.com/klrajput/Focus-Mode
+  author:
+    name: Focus Mode Team
+    email: team@focusmode.invalid
+
 publish:
   # Declared so artifacts carry update metadata, but this project has NO auto-update (P2).
   # The workflow always passes `--publish never` and uploads with `gh release create --draft`.

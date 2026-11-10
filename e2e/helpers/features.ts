@@ -7,7 +7,7 @@
 // Invariants: probes inspect only the checkout on disk (never a branch name, never a commit) — they
 // answer "can the running app do this now?", which is exactly what an E2E run needs.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,5 +48,73 @@ export function agentFocusLinkShipped(): boolean {
     existsSync(path.join(REPO_ROOT, 'agent/src/link/handlers.ts')) &&
     existsSync(path.join(REPO_ROOT, 'agent/src/focus/consent.ts')) &&
     main.includes('FocusLinkHandlers')
+  );
+}
+
+/** Concatenated text of every `.ts`/`.tsx` file under a workspace-relative directory (tests excluded). */
+function readSourceTree(relativeDir: string): string {
+  const absolute = path.join(REPO_ROOT, relativeDir);
+  if (!existsSync(absolute)) return '';
+  const chunks: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx)$/.test(entry.name) || /\.test\.(ts|tsx)$/.test(entry.name)) continue;
+      chunks.push(readFileSync(full, 'utf8'));
+    }
+  };
+  walk(absolute);
+  return chunks.join('\n');
+}
+
+/** A5 T-063: a per-minute scheduler tick exists and is started by the server bootstrap. */
+export function schedulerShipped(): boolean {
+  const server = readIfExists('server/src/server.ts');
+  const scheduleService = readIfExists('server/src/services/schedule.service.ts');
+  return (
+    (server.includes('scheduler') || server.includes('Scheduler')) &&
+    /MISSED|scheduleDue/.test(scheduleService)
+  );
+}
+
+/** A5 T-063/T-070: the missed-run notification API exists (FR-025). */
+export function notificationsApiShipped(): boolean {
+  return (
+    existsSync(path.join(REPO_ROOT, 'server/src/routes/notifications.routes.ts')) &&
+    readIfExists('server/src/routes/index.ts').includes('notifications.routes')
+  );
+}
+
+/** A7 T-064: the agent handles `scheduleDue` with a cancellable heads-up and reports cancellations. */
+export function agentScheduleFlowShipped(): boolean {
+  const agent = readSourceTree('agent/src');
+  return agent.includes('scheduleHeadsUp') && agent.includes('scheduleRunCancelled');
+}
+
+/** A5 (DEC-021 C-20): the device-token `GET /agent/allowlist` endpoint exists for scheduled starts. */
+export function agentAllowlistEndpointShipped(): boolean {
+  return readIfExists('server/src/routes/agent.routes.ts').includes('/allowlist');
+}
+
+/** A7 W4: the agent reports `session.started`/`session.ended` to the cloud (dashboard-closed path). */
+export function agentCloudSessionReportingShipped(): boolean {
+  const cloud = readSourceTree('agent/src/cloud');
+  return cloud.includes('session.started') && cloud.includes('session.ended');
+}
+
+/** A5 W4: the cloud merges/finalises sessions reported by the agent (REC-006 idempotency). */
+export function serverSessionReportingShipped(): boolean {
+  const server = readSourceTree('server/src');
+  // Real implementation signal: the hub validates/handles the cloud reporting messages
+  // (imports the strict shared schemas / switches on the message types), or a dedicated service
+  // exists. A passing comment mentioning "session.ended" is not enough (W4 branch check).
+  return (
+    server.includes('sessionStartedMessageSchema') ||
+    server.includes('sessionEndedMessageSchema') ||
+    server.includes("case 'session.started'")
   );
 }

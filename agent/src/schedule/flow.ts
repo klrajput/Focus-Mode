@@ -17,7 +17,11 @@ import {
 import { randomUUID } from 'node:crypto';
 import { fetchAgentAllowList, type AllowListFetchResult } from '../cloud/allowlist.js';
 import { nextCloudMessageId } from '../cloud/message-id.js';
-import { FocusRejectedError, type EnterFocusRequest, type FocusSnapshot } from '../focus/controller.js';
+import {
+  FocusRejectedError,
+  type EnterFocusRequest,
+  type FocusSnapshot,
+} from '../focus/controller.js';
 import { noopLogger, type Logger } from '../log.js';
 import { ScheduleHeadsUp, type AnnounceOutcome, type PendingRun } from './heads-up.js';
 
@@ -36,11 +40,7 @@ export type CancelOutcome =
 
 /** Why a run could not start; always logged and surfaced, never silently swallowed. */
 export type ScheduleFailureReason =
-  | 'NOT_PAIRED'
-  | 'UNSUPPORTED'
-  | 'ALLOWLIST_UNAVAILABLE'
-  | 'REJECTED'
-  | 'ALREADY_FOCUSING';
+  'NOT_PAIRED' | 'UNSUPPORTED' | 'ALLOWLIST_UNAVAILABLE' | 'REJECTED' | 'ALREADY_FOCUSING';
 
 export interface ScheduleFlowOptions {
   /** Full API base including `/api/v1` (DEC-013). */
@@ -69,11 +69,7 @@ export interface ScheduleFlowOptions {
   /** The user cancelled: the cloud has been told (or the send failed and is logged). */
   readonly onCancelled?: (pending: PendingRun, at: string) => void;
   /** The run did not start; `reason` is user-safe, `detail` is for the log. */
-  readonly onFailed?: (
-    pending: PendingRun,
-    reason: ScheduleFailureReason,
-    detail: string,
-  ) => void;
+  readonly onFailed?: (pending: PendingRun, reason: ScheduleFailureReason, detail: string) => void;
 }
 
 /**
@@ -122,7 +118,9 @@ export class ScheduleFlow {
    * already applying focus, or another run is pending — in those cases nothing starts and the
    * server's reaper records the run as MISSED (never force a start, INV-2/FR-012).
    */
-  handleScheduleDue(message: ScheduleDueMessage): AnnounceOutcome | 'IGNORED_FOCUSING' | 'IGNORED_STARTING' {
+  handleScheduleDue(
+    message: ScheduleDueMessage,
+  ): AnnounceOutcome | 'IGNORED_FOCUSING' | 'IGNORED_STARTING' {
     if (this.#options.isFocusing()) {
       this.#logger.warn('Ignored scheduleDue while a focus session is already running', {
         runId: message.runId,
