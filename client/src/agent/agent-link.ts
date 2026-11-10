@@ -10,12 +10,18 @@
  * through the injected `attest` callback → send `auth` → receive `authOk`/`authError` → send
  * `getState` and dispatch the authoritative `state` to the provider.
  *
+ * Post-pairing race (KI-010): the agent issues its post-pairing challenge from `cloud.on('paired')`,
+ * which fires BEFORE it opens the cloud `/agent-link` socket that marks the device CONNECTED. The
+ * first attestation therefore answers NO_DEVICE_CONNECTED; a short bounded retry (and, if that still
+ * fails, a fresh handshake) converges to PAIRED without the user reloading the page.
+ *
  * Every frame is validated with the frozen `localMessageSchema`, so an out-of-contract agent can
  * never inject a field the dashboard trusts. Failures are soft: the public surface is event-based
  * and all timer/socket/async paths are guarded, so a missing Focus Agent is a normal DISCONNECTED.
  */
 
 import {
+  ERROR_CODES,
   localMessageSchema,
   PROTOCOL_VERSION,
   type AgentConnectionStatus,
@@ -23,6 +29,7 @@ import {
   type AuthErrorMessage,
   type AuthOkMessage,
   type ChallengeMessage,
+  type ErrorCode,
   type FocusEndedMessage,
   type FocusRejectedMessage,
   type FocusStartedMessage,
@@ -31,6 +38,8 @@ import {
   type ScheduleHeadsUpMessage,
   type StateMessage,
 } from '@focus-mode/shared';
+
+import { isApiError } from '../api/errors';
 
 /** The browser WebSocket surface AgentLink needs; a tiny interface keeps unit tests mockable. */
 export interface LinkSocket {
@@ -93,6 +102,11 @@ export interface AgentLinkOptions {
   handshakeTimeoutMs?: number;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** Bounded retry for a transient attestation failure (KI-010 post-pairing race). */
+  attestRetryBaseMs?: number;
+  attestRetryMaxMs?: number;
+  /** Total `POST /devices/:id/attest` attempts (first try included) before re-handshaking. */
+  attestMaxAttempts?: number;
 }
 
 /** What `AgentLinkProvider` needs; lets tests inject a fake without opening a socket. */
@@ -123,7 +137,26 @@ const DEFAULT_SCAN_TIMEOUT_MS = 2000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 6000;
 const DEFAULT_RECONNECT_BASE_MS = 500;
 const DEFAULT_RECONNECT_MAX_MS = 8000;
+const DEFAULT_ATTEST_RETRY_BASE_MS = 250;
+const DEFAULT_ATTEST_RETRY_MAX_MS = 2000;
+const DEFAULT_ATTEST_MAX_ATTEMPTS = 7;
 const MAX_PORT = 65_535;
+
+/**
+ * Attestation failures that mean "the agent is still settling", not "this dashboard may never
+ * control it": the device exists but its cloud socket has not marked it CONNECTED yet (KI-010), or
+ * the API/network is briefly unavailable right after pairing. Everything else is permanent.
+ */
+const TRANSIENT_ATTEST_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+  ERROR_CODES.NO_DEVICE_CONNECTED,
+  ERROR_CODES.NOT_FOUND,
+  ERROR_CODES.CONFLICT,
+  ERROR_CODES.INTERNAL,
+]);
+
+function isTransientAttestationError(error: unknown): boolean {
+  return isApiError(error) && TRANSIENT_ATTEST_CODES.has(error.code);
+}
 
 /** One counter for correlation ids: unique per page load, no secrets, no PII. */
 let messageCounter = 0;
@@ -185,6 +218,9 @@ export class AgentLink implements AgentLinkClient {
   private readonly handshakeTimeoutMs: number;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly attestRetryBaseMs: number;
+  private readonly attestRetryMaxMs: number;
+  private readonly attestMaxAttempts: number;
 
   private readonly handlers = new Map<keyof AgentLinkEvents, Set<(payload: never) => void>>();
 
@@ -194,6 +230,8 @@ export class AgentLink implements AgentLinkClient {
   private authenticated = false;
   /** One attestation exchange at a time: a re-issued challenge must not race the first one. */
   private authInFlight = false;
+  /** Extra `POST /devices/:id/attest` attempts for the current challenge (KI-010 retry budget). */
+  private attestAttempts = 0;
   private disposed = false;
   private portIndex = 0;
   private reconnectDelayMs: number;
@@ -202,6 +240,7 @@ export class AgentLink implements AgentLinkClient {
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private challengeTimer: ReturnType<typeof setTimeout> | null = null;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
+  private attestRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: AgentLinkOptions = {}) {
@@ -218,6 +257,9 @@ export class AgentLink implements AgentLinkClient {
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
     this.reconnectBaseMs = options.reconnectBaseMs ?? DEFAULT_RECONNECT_BASE_MS;
     this.reconnectMaxMs = options.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS;
+    this.attestRetryBaseMs = options.attestRetryBaseMs ?? DEFAULT_ATTEST_RETRY_BASE_MS;
+    this.attestRetryMaxMs = options.attestRetryMaxMs ?? DEFAULT_ATTEST_RETRY_MAX_MS;
+    this.attestMaxAttempts = options.attestMaxAttempts ?? DEFAULT_ATTEST_MAX_ATTEMPTS;
     this.reconnectDelayMs = this.reconnectBaseMs;
   }
 
@@ -396,6 +438,7 @@ export class AgentLink implements AgentLinkClient {
     this.helloMessage = null;
     this.authenticated = false;
     this.authInFlight = false;
+    this.attestAttempts = 0;
     this.reconnectDelayMs = this.reconnectBaseMs;
 
     socket.onopen = null;
@@ -421,11 +464,13 @@ export class AgentLink implements AgentLinkClient {
     this.clearTimer('handshake');
     this.clearTimer('challenge');
     this.clearTimer('auth');
+    this.clearTimer('attestRetry');
     const socket = this.socket;
     this.socket = null;
     this.helloMessage = null;
     this.authenticated = false;
     this.authInFlight = false;
+    this.attestAttempts = 0;
     if (socket !== null) detach(socket);
     const pending = this.pendingSocket;
     this.pendingSocket = null;
@@ -546,13 +591,28 @@ export class AgentLink implements AgentLinkClient {
 
   private async authenticate(socket: LinkSocket, challenge: ChallengeMessage): Promise<void> {
     this.authInFlight = true;
+    this.attestAttempts = 0;
+    await this.runAttestation(socket, challenge);
+  }
+
+  /**
+   * One attestation attempt. Transient failures (`NO_DEVICE_CONNECTED` right after pairing, a
+   * briefly unreachable API) are retried with backoff while the same socket stays open; permanent
+   * rejections surface immediately. Exhausted transient retries drop the socket so the next
+   * handshake receives a fresh challenge instead of leaving the badge on "Not paired" forever.
+   */
+  private async runAttestation(socket: LinkSocket, challenge: ChallengeMessage): Promise<void> {
+    if (this.disposed || this.socket !== socket) {
+      this.authInFlight = false;
+      return;
+    }
+
     let deviceId: string | null;
     try {
       deviceId = await this.resolveDeviceId();
     } catch {
-      this.authInFlight = false;
-      this.emit('error', { message: 'We could not read the devices linked to this account.' });
-      this.emitStatus('IDLE', 'We could not verify this dashboard with your Focus Agent.');
+      if (this.retryAttestation(socket, challenge)) return;
+      this.failAttestation(socket, 'We could not read the devices linked to this account.', true);
       return;
     }
 
@@ -562,21 +622,22 @@ export class AgentLink implements AgentLinkClient {
     }
 
     if (deviceId === null) {
-      this.authInFlight = false;
-      this.emit('error', {
-        message: 'No device is linked to this account yet. Pair your Focus Agent on Devices.',
-      });
-      this.emitStatus('IDLE', 'Your Focus Agent is paired, but this account has no linked device.');
+      // The account genuinely has no device (e.g. it was just unpaired): retrying cannot help.
+      this.failAttestation(
+        socket,
+        'No device is linked to this account yet. Pair your Focus Agent on Devices.',
+        false,
+      );
       return;
     }
 
     let attestation: string;
     try {
       attestation = await this.attest(deviceId, challenge.nonce);
-    } catch {
-      this.authInFlight = false;
-      this.emit('error', { message: 'The dashboard could not attest this Focus Agent.' });
-      this.emitStatus('IDLE', 'We could not verify this dashboard with your Focus Agent.');
+    } catch (error) {
+      const transient = isTransientAttestationError(error);
+      if (transient && this.retryAttestation(socket, challenge)) return;
+      this.failAttestation(socket, 'The dashboard could not attest this Focus Agent.', transient);
       return;
     }
 
@@ -592,6 +653,37 @@ export class AgentLink implements AgentLinkClient {
     }, this.handshakeTimeoutMs);
 
     this.send({ type: 'auth', attestation });
+  }
+
+  /** Schedule the next attestation attempt; false once the bounded budget is exhausted. */
+  private retryAttestation(socket: LinkSocket, challenge: ChallengeMessage): boolean {
+    if (this.disposed || this.socket !== socket) return false;
+    if (this.attestAttempts + 1 >= this.attestMaxAttempts) return false;
+
+    this.attestAttempts += 1;
+    const delay = Math.min(
+      this.attestRetryBaseMs * 2 ** (this.attestAttempts - 1),
+      this.attestRetryMaxMs,
+    );
+    this.clearTimer('attestRetry');
+    this.attestRetryTimer = setTimeout(() => {
+      this.attestRetryTimer = null;
+      void this.runAttestation(socket, challenge);
+    }, delay);
+    return true;
+  }
+
+  /** Give up the current attestation; `rehandshake` asks the agent for a fresh challenge. */
+  private failAttestation(socket: LinkSocket, message: string, rehandshake: boolean): void {
+    this.authInFlight = false;
+    if (this.disposed || this.socket !== socket) return;
+
+    this.emit('error', { message });
+    if (rehandshake) {
+      this.handleDrop(socket);
+      return;
+    }
+    this.emitStatus('IDLE', 'We could not verify this dashboard with your Focus Agent.');
   }
 
   private handleAuthOk(socket: LinkSocket, authOk: AuthOkMessage): void {
@@ -638,7 +730,9 @@ export class AgentLink implements AgentLinkClient {
     return this.authenticated;
   }
 
-  private clearTimer(name: 'scan' | 'handshake' | 'challenge' | 'auth' | 'reconnect'): void {
+  private clearTimer(
+    name: 'scan' | 'handshake' | 'challenge' | 'auth' | 'attestRetry' | 'reconnect',
+  ): void {
     switch (name) {
       case 'scan':
         if (this.scanTimer !== null) clearTimeout(this.scanTimer);
@@ -655,6 +749,10 @@ export class AgentLink implements AgentLinkClient {
       case 'auth':
         if (this.authTimer !== null) clearTimeout(this.authTimer);
         this.authTimer = null;
+        break;
+      case 'attestRetry':
+        if (this.attestRetryTimer !== null) clearTimeout(this.attestRetryTimer);
+        this.attestRetryTimer = null;
         break;
       case 'reconnect':
         if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);

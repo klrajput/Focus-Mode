@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { ERROR_CODES } from '@focus-mode/shared';
 import type {
   AuthOkMessage,
   FocusEndedMessage,
@@ -17,6 +18,7 @@ import type {
   StateMessage,
 } from '@focus-mode/shared';
 
+import { ApiError } from '../api/errors';
 import { AuthContext } from '../auth/auth-context';
 import { createTestQueryClient, makeAuthValue, makeUser } from '../test/test-utils';
 import { AgentLinkProvider, useAgentLink, type AgentLinkFactory } from './agent-link-provider';
@@ -296,6 +298,7 @@ describe('AgentLinkProvider', () => {
 
   it('KI-010: flips Not paired → Connected without a reload when the agent pairs (real link)', async () => {
     const sockets: MockLinkSocket[] = [];
+    let attestCalls = 0;
     const link = new AgentLink({
       socketFactory: (url, protocols) => {
         const socket = new MockLinkSocket(url, protocols);
@@ -303,7 +306,21 @@ describe('AgentLinkProvider', () => {
         return socket;
       },
       resolveDeviceId: async () => '507f1f77bcf86cd799439011',
-      attest: async () => 'header.payload.signature-header-payload-signature',
+      // The real race: the agent's post-pairing challenge can arrive before its cloud link marks
+      // the device CONNECTED, so the first attestation answers NO_DEVICE_CONNECTED.
+      attest: async () => {
+        attestCalls += 1;
+        if (attestCalls === 1) {
+          throw new ApiError(
+            ERROR_CODES.NO_DEVICE_CONNECTED,
+            409,
+            'No device connected — start your Focus Agent.',
+          );
+        }
+        return 'header.payload.signature-header-payload-signature';
+      },
+      attestRetryBaseMs: 1,
+      attestRetryMaxMs: 2,
     });
 
     renderProbe(link);
@@ -315,13 +332,15 @@ describe('AgentLinkProvider', () => {
     expect(screen.getByTestId('status')).toHaveTextContent('IDLE');
 
     // The dashboard nudges, the agent polls its token and re-issues a challenge on the SAME socket.
-    await act(async () => {
-      socket?.receive(CHALLENGE);
-      // The attestation round-trip resolves asynchronously (resolveDeviceId → attest → auth).
-      await Promise.resolve();
-    });
+    act(() => socket?.receive(CHALLENGE));
 
-    expect(socket?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+    await vi.waitFor(
+      () => {
+        expect(socket?.frames().some((frame) => frame.type === 'auth')).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+    expect(attestCalls).toBe(2);
 
     await act(async () => {
       socket?.receive(AUTH_OK);
