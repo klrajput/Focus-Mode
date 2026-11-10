@@ -101,3 +101,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: 'false'
+          # Reviewed allowlist: docs examples, .env.example placeholders and the exam-mandated
+          # public demo credentials only (.gitleaks.toml) — the scan stays enabled.
+          GITLEAKS_CONFIG: .gitleaks.toml

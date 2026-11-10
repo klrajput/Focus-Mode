@@ -31,3 +31,10 @@ regexes = [
   '''-----BEGIN [A-Z ]*PUBLIC KEY-----''',
   '''MCowBQYDK2VwAyEA[A-Za-z0-9+/=]+''',
 ]
+
+[[allowlists]]
+description = "Test-only fixtures: fake throwaway secrets that satisfy SEC-2 length checks are legitimate in test configs and helper files (never used at runtime)."
+paths = [
+  '''(^|/)vitest\.config\.ts$''',
+  '''(^|/)src/test/''',
+]
