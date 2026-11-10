@@ -21,48 +21,59 @@
         <p id="state-line" class="agent__state" role="status" aria-live="polite">
           Starting Focus Agent…
         </p>
+        <ul class="links" aria-label="Connection status">
+          <li id="cloud-line" class="links__item">Cloud: checking…</li>
+          <li id="dashboard-line" class="links__item">Dashboard link: checking…</li>
+        </ul>
+        <p id="dashboard-hint" class="muted" hidden>
+          Start a focus session from the dashboard on this computer.
+        </p>
       </header>
 
       <section id="pairing-section" class="card" aria-labelledby="pairing-title" hidden>
         <h2 id="pairing-title" class="card__title">Pairing code</h2>
         <p id="pairing-code" class="pairing-code" aria-label="Pairing code">— — — — — —</p>
-        <p class="muted">
+        <p id="pairing-expiry" class="muted" hidden></p>
+        <p id="pairing-hint" class="muted">
           Enter this code on the dashboard: Devices → Pair a device. It is shown only in this window
           and is never sent to the dashboard or the cloud.
         </p>
       </section>
 
-      <section id="focus-section" class="card" aria-labelledby="focus-title" hidden>
-        <h2 id="focus-title" class="card__title">Focus session</h2>
+      <section id="focus-section" class="card card--focus" aria-labelledby="focus-title" hidden>
+        <h2 id="focus-title" class="card__title">
+          <span class="focus-dot" aria-hidden="true">●</span>
+          Focus session in progress
+        </h2>
         <p id="focus-countdown" class="countdown" role="timer" aria-live="off">—</p>
+        <p id="focus-ends" class="muted"></p>
+        <p id="focus-source" class="muted"></p>
+        <p id="focus-allowlist" class="muted"></p>
         <button id="end-focus" class="button button--primary" type="button">End focus</button>
         <p class="muted">Ending a session restores every window this agent moved aside.</p>
       </section>
 
+      <section id="alert-section" class="card card--warning" aria-labelledby="alert-title" hidden>
+        <h2 id="alert-title" class="card__title">Needs attention</h2>
+        <ul id="alert-list" class="alerts"></ul>
+      </section>
+
       <section class="card" aria-labelledby="allowlist-title">
         <h2 id="allowlist-title" class="card__title">Allow-list (read-only)</h2>
+        <p id="allowlist-summary" class="muted">Checking the allow-list…</p>
         <p class="muted">Protected apps can never be removed or moved aside.</p>
-        <ul id="protected-list" class="list" aria-label="Protected apps"></ul>
-        <p id="allowlist-empty" class="muted">No extra apps allowed yet.</p>
+        <ul id="protected-list" class="list" aria-label="Protected apps (locked)"></ul>
+        <p id="allowlist-empty" class="muted" hidden>No extra apps are allowed to stay open yet.</p>
         <ul id="allowlist" class="list" aria-label="Allowed apps"></ul>
       </section>
 
-      <section
-        id="warning-section"
-        class="card card--warning"
-        aria-labelledby="warning-title"
-        hidden
-      >
-        <h2 id="warning-title" class="card__title">Window control unavailable</h2>
-        <p id="warning-text" class="muted"></p>
-      </section>
-
       <footer class="agent__footer">
-        <p id="capabilities" class="muted">Window control: checking…</p>
-        <p class="muted">
-          Focus Mode never starts itself. Start at login is off by default and lives in the tray
-          menu.
+        <p id="consent-line" class="muted" data-tone="muted">First-run permission: checking…</p>
+        <p id="start-at-login-note" class="muted">
+          Focus Mode never starts itself. Turn on Start at login in the tray menu only if you want
+          the Focus Agent available after login. You can switch it off any time.
         </p>
+        <p id="capabilities" class="muted">Window control: checking…</p>
         <button id="quit" class="button button--quiet" type="button">Quit Focus Agent</button>
         <p id="action-error" class="error" role="alert" hidden></p>
       </footer>

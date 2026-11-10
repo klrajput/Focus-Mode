@@ -24,6 +24,7 @@ import type {
   AttestationRequest,
   AttestationVerification,
 } from './attestation.js';
+import type { LinkControlHandlers } from './handlers.js';
 import {
   buildAuthError,
   buildAuthOk,
@@ -79,6 +80,13 @@ export interface LinkServerOptions {
   readonly getPairing?: () => AttestationBinding | null;
   /** EdDSA attestation verifier; absent means attestation is not configured and fails closed. */
   readonly verifyAttestation?: (request: AttestationRequest) => Promise<AttestationVerification>;
+  /**
+   * Authenticated control handlers (T-051). Absent keeps the fail-closed W2 behaviour: control
+   * messages are answered with `focusRejected{INVALID}` and the controller is never reached.
+   */
+  readonly controlHandlers?: LinkControlHandlers;
+  /** Observation hook (AGENT_SMOKE, tests): called after a handled inbound frame is answered. */
+  readonly onMessageHandled?: (type: LocalMessageType) => void;
   readonly logger?: Logger;
   readonly portFallbackAttempts?: number;
   readonly maxConnections?: number;
@@ -288,6 +296,23 @@ export class LinkServer {
     }
   }
 
+  /**
+   * Sends a lifecycle frame (`focusStarted`/`focusEnded`) to every authenticated dashboard.
+   * Default is authenticated-only: focus state is control-plane truth (REC-003), not something
+   * an unattested page should receive. Exactly one frame per event per socket (FR-004).
+   */
+  broadcast(message: LocalMessage, options: { readonly authenticatedOnly?: boolean } = {}): void {
+    const wss = this.#wss;
+    if (wss === undefined) return;
+    const authenticatedOnly = options.authenticatedOnly ?? true;
+    for (const socket of wss.clients) {
+      const state = this.#connections.get(socket);
+      if (state === undefined) continue;
+      if (authenticatedOnly && !state.authenticated) continue;
+      this.#send(socket, message);
+    }
+  }
+
   #pairing(): AttestationBinding | null {
     return this.#options.getPairing?.() ?? null;
   }
@@ -445,32 +470,72 @@ export class LinkServer {
 
     switch (message.type) {
       case 'getState': {
-        this.#send(socket, buildState(this.#options.getSnapshot()));
+        const handlers = this.#options.controlHandlers;
+        this.#send(
+          socket,
+          handlers === undefined ? buildState(this.#options.getSnapshot()) : handlers.getState(),
+        );
+        this.#options.onMessageHandled?.('getState');
         return;
       }
       case 'paired': {
         this.#options.onPaired?.();
         this.#send(socket, buildState(this.#options.getSnapshot()));
+        this.#options.onMessageHandled?.('paired');
         return;
       }
       case 'listApps':
       case 'enterFocus':
       case 'exitFocus': {
-        // Authenticated, but dashboard-driven control is wired by T-045/T-046 (the Focus
-        // Controller stays untouched here, and no focus is ever faked).
-        this.#send(
-          socket,
-          buildFocusRejected(
-            'INVALID',
-            'Dashboard focus control is not enabled in this agent build yet.',
-          ),
-        );
+        const handlers = this.#options.controlHandlers;
+        if (handlers === undefined) {
+          // Fail closed (W2 behaviour): authenticated, but this build has no focus wiring, so
+          // never pretend a session started.
+          this.#send(
+            socket,
+            buildFocusRejected(
+              'INVALID',
+              'Dashboard focus control is not enabled in this agent build yet.',
+            ),
+          );
+          this.#options.onMessageHandled?.(message.type);
+          return;
+        }
+        let pending: Promise<readonly LocalMessage[]>;
+        if (message.type === 'enterFocus') pending = handlers.enterFocus(message);
+        else if (message.type === 'exitFocus') pending = handlers.exitFocus(message);
+        else pending = handlers.listApps();
+        this.#runControl(socket, message.type, pending);
         return;
       }
       default: {
         this.#rejectAndClose(socket, ERROR_CODES.VALIDATION_ERROR, 'Unsupported message');
       }
     }
+  }
+
+  /** Awaits a control handler and sends its reply frames to the requesting socket only. */
+  #runControl(
+    socket: WebSocket,
+    type: LocalMessageType,
+    pending: Promise<readonly LocalMessage[]>,
+  ): void {
+    void pending
+      .then((messages) => {
+        for (const message of messages) this.#send(socket, message);
+        this.#options.onMessageHandled?.(type);
+      })
+      .catch((error: unknown) => {
+        this.#logger.error(
+          'A local control handler rejected unexpectedly',
+          error instanceof Error ? error.message : 'unknown error',
+        );
+        this.#send(
+          socket,
+          buildFocusRejected('INVALID', 'That focus request could not be processed.'),
+        );
+        this.#options.onMessageHandled?.(type);
+      });
   }
 
   /**

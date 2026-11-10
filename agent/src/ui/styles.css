@@ -170,3 +170,58 @@ body {
   color: var(--error);
   font-size: 12.5px;
 }
+
+/* Hidden must win over the flex rules below (author CSS otherwise overrides the UA [hidden]). */
+[hidden] {
+  display: none !important;
+}
+
+/* Cloud + dashboard link lines: status is always icon *and* text (never colour alone). */
+.links {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* FOCUSING: a visible focus indicator that cannot be mistaken for a normal state. */
+.card--focus {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.focus-dot {
+  color: var(--accent);
+}
+
+/* Honest error states (unsupported window control, cloud/link down). */
+.alerts {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.alerts__item {
+  color: var(--text);
+}
+
+.alerts__item strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.muted[data-tone='ok'] {
+  color: var(--accent);
+}
+
+.button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
