@@ -50,6 +50,22 @@ const envSchema = z
       .default('info'),
     /** Failed auth requests allowed per IP per 15 min (SEC-4 default 10). */
     RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).max(1000).default(10),
+    /**
+     * Express `trust proxy` hop count (W6 SEC-4): 0 = direct connection, 1 = exactly one
+     * reverse proxy (Render/Railway) whose X-Forwarded-For is trusted. Never `true`: an
+     * unrestricted trust would let any client spoof its IP and bypass per-IP rate limits.
+     */
+    TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
+    /** General `/api/v1` requests allowed per IP per minute (W6 SEC-4 defence in depth). */
+    RATE_LIMIT_API_MAX: z.coerce.number().int().min(1).max(100_000).default(600),
+    /** Per-user per-minute limits for the expensive / user-mutating W5 endpoints (SEC-4). */
+    RATE_LIMIT_INSIGHTS_MAX: z.coerce.number().int().min(1).max(10_000).default(60),
+    RATE_LIMIT_NOTIFICATIONS_MAX: z.coerce.number().int().min(1).max(10_000).default(120),
+    RATE_LIMIT_USERS_MAX: z.coerce.number().int().min(1).max(10_000).default(60),
+    RATE_LIMIT_SESSIONS_MAX: z.coerce.number().int().min(1).max(10_000).default(120),
+    RATE_LIMIT_ADMIN_MAX: z.coerce.number().int().min(1).max(10_000).default(120),
+    /** Per-IP limit for public/unauthenticated endpoints (agent links, attest key, …). */
+    RATE_LIMIT_PUBLIC_MAX: z.coerce.number().int().min(1).max(10_000).default(60),
     /** SEC-5 pairing pepper: HMAC-SHA256 key for the pairing digest (DEC-014). */
     PAIR_PEPPER: z
       .string()
@@ -137,6 +153,15 @@ export const env = Object.freeze({
   CLIENT_URLS: config.CLIENT_URL as readonly string[],
   LOG_LEVEL: config.LOG_LEVEL,
   RATE_LIMIT_AUTH_MAX: config.RATE_LIMIT_AUTH_MAX,
+  /** Express trust-proxy hop count for real client IPs behind a reverse proxy (W6). */
+  TRUST_PROXY: config.TRUST_PROXY,
+  RATE_LIMIT_API_MAX: config.RATE_LIMIT_API_MAX,
+  RATE_LIMIT_INSIGHTS_MAX: config.RATE_LIMIT_INSIGHTS_MAX,
+  RATE_LIMIT_NOTIFICATIONS_MAX: config.RATE_LIMIT_NOTIFICATIONS_MAX,
+  RATE_LIMIT_USERS_MAX: config.RATE_LIMIT_USERS_MAX,
+  RATE_LIMIT_SESSIONS_MAX: config.RATE_LIMIT_SESSIONS_MAX,
+  RATE_LIMIT_ADMIN_MAX: config.RATE_LIMIT_ADMIN_MAX,
+  RATE_LIMIT_PUBLIC_MAX: config.RATE_LIMIT_PUBLIC_MAX,
   /** SEC-5 pepper; undefined in dev when unconfigured (pairing then answers 500 INTERNAL). */
   PAIR_PEPPER: config.PAIR_PEPPER ?? ephemeralTestSecrets?.pairPepper,
   /** SEC-7 PEM keypair; undefined in dev when unconfigured (attestation then answers 500). */

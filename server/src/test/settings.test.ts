@@ -250,6 +250,30 @@ describe('POST /api/v1/devices/unpair-all (FR-029, W5 additive endpoint delta C-
     expect(vi.mocked(revokeDevice)).toHaveBeenCalledWith(ownDevice.deviceId);
   });
 
+  it('keeps going when one device revocation fails, and a retry is idempotent (A2 review)', async () => {
+    const first = await createTestDevice({ ownerId: new Types.ObjectId(userId), name: 'Mac A' });
+    const second = await createTestDevice({ ownerId: new Types.ObjectId(userId), name: 'Mac B' });
+    // Simulate the hub failing for the first device only; the loop must not abort.
+    vi.mocked(revokeDevice).mockRejectedValueOnce(new Error('agent hub unavailable'));
+
+    const firstCall = await request(app)
+      .post('/api/v1/devices/unpair-all')
+      .set(bearer(accessToken));
+
+    expect(firstCall.status).toBe(200);
+    expect(firstCall.body.data.unpaired).toBe(1);
+    expect(await Device.countDocuments({ ownerId: userId })).toBe(1);
+    expect(vi.mocked(revokeDevice)).toHaveBeenCalledTimes(2);
+
+    // Retrying completes the remaining device (idempotent, no duplicate work).
+    const retry = await request(app).post('/api/v1/devices/unpair-all').set(bearer(accessToken));
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.data.unpaired).toBe(1);
+    expect(await Device.countDocuments({ ownerId: userId })).toBe(0);
+    expect([first.deviceId, second.deviceId]).toContain(vi.mocked(revokeDevice).mock.calls[1]?.[0]);
+  });
+
   it('requires authentication (401) and rejects ADMIN tokens (403, USER label)', async () => {
     const unauthenticated = await request(app).post('/api/v1/devices/unpair-all');
     const asAdmin = await request(app)

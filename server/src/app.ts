@@ -35,6 +35,10 @@ export function buildApp(options: BuildAppOptions = {}): Express {
   // Do not advertise the framework (helmet also manages this; explicit for non-helmet routes).
   app.disable('x-powered-by');
 
+  // W6/SEC-4: trust exactly the configured number of reverse-proxy hops so req.ip (and every
+  // per-IP rate limiter) sees the real client without accepting spoofed X-Forwarded-For headers.
+  app.set('trust proxy', env.TRUST_PROXY);
+
   app.use(pinoHttp({ logger, genReqId: () => randomUUID() }));
   app.use(helmet());
   app.use(cors(buildCorsOptions()));
@@ -58,7 +62,9 @@ export function buildApp(options: BuildAppOptions = {}): Express {
 /** SEC-3: reflect only the dashboard origins configured in CLIENT_URL; no wildcard. */
 function buildCorsOptions(): CorsOptions {
   return {
-    credentials: true,
+    // W6/SEC-3: Bearer tokens live in the Authorization header (no cookies), so cross-origin
+    // credentials are unnecessary — and disabling them removes a class of CSRF/cookie abuse.
+    credentials: false,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     maxAge: 600,

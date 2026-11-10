@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { changePasswordSchema, profilePatchSchema } from '@focus-mode/shared';
 import { changeMyPassword, getMe, patchMe } from '../controllers/users.controller.js';
 import { requireAuth } from '../middlewares/auth.js';
-import { createAuthRateLimiter } from '../middlewares/rateLimit.js';
+import { createAuthRateLimiter, createUserSettingsRateLimiter } from '../middlewares/rateLimit.js';
 import { validate } from '../middlewares/validate.js';
 
 export interface UsersRouterOptions {
@@ -23,6 +23,8 @@ export function createUsersRouter(options: UsersRouterOptions): Router {
   const passwordLimiter = createAuthRateLimiter(options.passwordRateLimitMax);
 
   router.use(requireAuth);
+  // W6/SEC-4: per-user limit on the settings surface (default 60/min; password has its own too).
+  router.use(createUserSettingsRateLimiter());
   router.get('/me', getMe);
   router.patch('/me', validate(profilePatchSchema), patchMe);
   router.post('/me/password', passwordLimiter, validate(changePasswordSchema), changeMyPassword);

@@ -48,10 +48,57 @@ export function getAttestationPublicKey(): AttestationPublicKey {
   return { publicKey: loadVerifiedKeyPair().publicKeyPem, algorithm: ATTESTATION_ALGORITHM };
 }
 
+/**
+ * W6/SEC-7 replay cache: every (userId, deviceId, nonce) tuple may be signed once per TTL.
+ * Process-local (single API instance, TECHNICAL_DESIGN §8) and insertion-ordered so the map can
+ * be pruned deterministically; it never holds the attestation itself, only expiring tick counts.
+ */
+const nonceExpiryByKey = new Map<string, number>();
+const NONCE_CACHE_MAX_ENTRIES = 5_000;
+
+/** Test-only: clear the replay cache (like the rate-limit stores, it is process-local). */
+export function resetAttestationNonceCache(): void {
+  nonceExpiryByKey.clear();
+}
+
+function attestationNonceKey(input: SignAttestationInput): string {
+  return `${input.userId}:${input.deviceId}:${input.nonce}`;
+}
+
+function assertNonceUnused(input: SignAttestationInput, nowMs: number): void {
+  for (const [key, expiresAtMs] of nonceExpiryByKey) {
+    if (expiresAtMs <= nowMs) nonceExpiryByKey.delete(key);
+  }
+  const key = attestationNonceKey(input);
+  if (nonceExpiryByKey.has(key)) {
+    throw new AppError(ERROR_CODES.CONFLICT, 'This attestation nonce was already used.');
+  }
+  if (nonceExpiryByKey.size >= NONCE_CACHE_MAX_ENTRIES) {
+    // Bounded memory under a flood: drop the oldest entries (Map keeps insertion order).
+    let toDrop = Math.ceil(NONCE_CACHE_MAX_ENTRIES / 4);
+    for (const oldest of nonceExpiryByKey.keys()) {
+      nonceExpiryByKey.delete(oldest);
+      toDrop -= 1;
+      if (toDrop <= 0) break;
+    }
+  }
+  nonceExpiryByKey.set(key, nowMs + ATTESTATION_TTL_SECONDS * 1000);
+}
+
+/** Injectable clock (tests only); the HTTP controller always uses the real clock. */
+export interface SignAttestationDeps {
+  now?: () => number;
+}
+
 /** Sign the nonce-bound, 60 s attestation the dashboard sends over the local channel. */
-export function signDeviceAttestation(input: SignAttestationInput): DeviceAttestation {
+export function signDeviceAttestation(
+  input: SignAttestationInput,
+  deps: SignAttestationDeps = {},
+): DeviceAttestation {
+  const nowMs = deps.now?.() ?? Date.now();
+  assertNonceUnused(input, nowMs);
   const { privateKeyPem } = loadVerifiedKeyPair();
-  const issuedAtSeconds = Math.floor(Date.now() / 1000);
+  const issuedAtSeconds = Math.floor(nowMs / 1000);
   const expiresAtSeconds = issuedAtSeconds + ATTESTATION_TTL_SECONDS;
 
   const attestation = signEdDsaJwt(

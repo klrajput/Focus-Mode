@@ -6,13 +6,20 @@
 
 import { Router } from 'express';
 import { list } from '../controllers/agent-links.controller.js';
+import { createPublicRateLimiter } from '../middlewares/rateLimit.js';
 import { validateQuery } from '../middlewares/validate.js';
 import { pageLimitQuerySchema } from '../utils/pagination.js';
 
 export function createAgentLinksRouter(): Router {
   const router = Router();
 
-  router.get('/', validateQuery(pageLimitQuerySchema), list);
+  // W6/SEC-4: this route is public → per-IP limiter (default 60/min).
+  router.get(
+    '/',
+    createPublicRateLimiter('agent-links'),
+    validateQuery(pageLimitQuerySchema),
+    list,
+  );
 
   return router;
 }

@@ -34,6 +34,17 @@ export function duplicateKeyFields(error: unknown): string[] {
   return Object.keys(keyValue as Record<string, unknown>);
 }
 
+/**
+ * Mongoose cast errors (`CastError`) and raw BSON parse errors are caused by an unparseable
+ * 24-hex id in a URL path. That is a *missing resource* (404), never an internal 5xx — see the
+ * central error handler, which maps these before the generic 500.
+ */
+export function isInvalidObjectIdError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const name = (error as { name?: unknown }).name;
+  return name === 'CastError' || name === 'BSONError' || name === 'BSONTypeError';
+}
+
 export function isMongooseValidationError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
