@@ -92,3 +92,12 @@
 - **Q4 StartFocusCard with no agent:** **disable Start + show the reason + "No device connected — start your Focus Agent" card** (never a silent failure). Matches FR-004/FR-005 AC.
 - **Q5 `/settings` v1 scope:** omit account deletion; start-at-login stays an **agent tray** toggle (REC-008) and is not a dashboard setting. Keep profile, change password, timezone, default duration, unpair-all, download links.
 - **Consequences:** A4 implements the spec as written; any deviation is a UX-spec change request to A3.
+
+## DEC-013 — Contract details frozen before W1 (from A8's T-006 findings)
+- **Date:** 2026-11-10 · **Status:** accepted · **Owner:** A0 (A2 freezes in INTEGRATION_CONTRACTS/T-005)
+- **API base URL convention:** `VITE_API_BASE_URL` (client) and `AGENT_API_BASE_URL` (agent) are the **full API base URL including the `/api/v1` prefix** — dev `http://localhost:5000/api/v1`, deployed dashboard `/api/v1` (relative, behind the same-origin Vercel/Netlify `/api/*` rewrite). Clients append only endpoint paths; no client or agent hard-codes `/api/v1` anywhere else (NFR-004).
+- **Attestation algorithm:** **EdDSA (Ed25519)** — SEC-7 allows RS256/EdDSA; EdDSA keys are small, fast and jsonwebtoken 9.0.3 supports it. `ATTEST_PRIVATE_KEY`/`ATTEST_PUBLIC_KEY` hold single-line PEM (dotenv `\n` expansion documented). 60 s TTL, bound to nonce + aud(deviceId) + sub(userId). If T-043/T-044 hit a tooling blocker, an amendment ADR is required (no silent change).
+- **Agent env loading:** add `zod@4.6.7` + `dotenv@18.0.10` to `agent/package.json` in W1 (A7 owns agent/package.json). Dev reads `agent/.env`; packaged builds use process env only; zod validates and fails fast.
+- **Seed identities (exam requirement):** `admin@demo.com / Admin@123` (ADMIN) and `kabir@demo.com / Kabir@123` (USER, persona Kabir). A6's T-013 seed, `SEED_*` env vars in `server/.env.example` and A1's README must all state the same values.
+- **MongoDB Memory Server on this dev machine:** requires `MONGOMS_DOWNLOAD_DIR=<repo>/node_modules/.cache/mongodb-memory-server` (the sandbox denies writes to `~/.cache`); A5/A9 must set it in the vitest setup or root test script (KI-006). CI downloads its own binary and is unaffected.
+- **Consequences:** W1 workers code against these; A2's T-005 doc is the authority and any change needs the AGENTS §5 process.
