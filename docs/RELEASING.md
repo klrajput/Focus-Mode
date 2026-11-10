@@ -1,8 +1,9 @@
 # RELEASING.md — Focus Agent build & release runbook
 
 Owner: **A10 (Release & CI)** · Plan items: **T-110** (`agent/electron-builder.yml` + `agent/build/`),
-**T-112** (`.github/workflows/release.yml`), **T-114** (signing/notarisation runbook).
-Last updated: 2026-11-10.
+**T-112** (`.github/workflows/release.yml`), **T-113** (per-OS AGENT_SMOKE job + first real installers),
+**T-114** (signing/notarisation runbook), **T-115** (Dependabot + audit gating).
+Last updated: 2026-11-10 (W4).
 
 > **Hard rule:** tags are pushed **only by the human maintainer**. AI workers never run `git`
 > (no branch, tag, commit or push commands) — they prepare the files and hand them to A0.
@@ -17,12 +18,14 @@ This document covers packaging the **Focus Agent** (the Electron desktop app) an
 installers. It does **not** cover the dashboard (Vercel) or API (Render/Railway) deployments — see
 `docs/PLATFORMS.md` / the deployment section of the README once written.
 
-Two files define the whole pipeline:
+Two files define the whole pipeline (plus the smoke launcher and dependency-update policy):
 
 | File | What it does |
 |---|---|
 | `agent/electron-builder.yml` | Targets per OS, artifact names, NSIS/dmg/deb options, `asarUnpack` for `koffi`, draft-publish metadata, optional signing/entitlements. |
-| `.github/workflows/release.yml` | Runs one native runner per OS, builds installers with `--publish never`, uploads workflow artifacts, and creates a **draft** GitHub Release on tag pushes only. |
+| `.github/workflows/release.yml` | Runs one native runner per OS, builds installers with `--publish never`, uploads workflow artifacts, runs the per-OS `AGENT_SMOKE` job, and creates a **draft** GitHub Release on tag pushes only. |
+| `scripts/smoke/launch.mjs` | Launches the built agent with `AGENT_SMOKE=1`, drives the real loopback link (`hello` + `getState`) and exits 0 only when every assertion passed. Used locally and by the release smoke job. |
+| `.github/dependabot.yml` | Weekly grouped npm + GitHub Actions PRs (no auto-merge) — §9. |
 
 `electron-updater` is **not** installed and no update feed is consumed (auto-update is P2). The
 GitHub `publish` block in `electron-builder.yml` exists only to declare the provider and
@@ -53,8 +56,8 @@ Two practical consequences of that block:
 | Linux x64 | `ubuntu-24.04` | `AppImage`, `deb` | `focus-mode-agent-<ver>-linux-x64.AppImage`, `…-linux-x64.deb` | `rpm` is **optional and not built** (needs `rpm` tooling on the runner). |
 
 Workflow artifact bundles are named `focus-agent-<name>` (`windows-x64`, `macos-arm64`,
-`macos-x64`, `linux-x64`, retention 14 days). The draft release receives the installers plus a
-generated `SHA256SUMS.txt`.
+`macos-x64`, `linux-x64`, retention 14 days), with the per-OS smoke logs as
+`smoke-log-<name>`. The draft release receives the installers plus a generated `SHA256SUMS.txt`.
 
 Bundle id / product name: `com.focusmode.agent` / **Focus Mode Agent**.
 
@@ -75,7 +78,9 @@ artifacts (and breaking the draft release with duplicate asset names).
 3. Release notes drafted (user-visible changes, known issues from `docs/KNOWN_ISSUES.md`).
 4. Human OS checks for the version being shipped: T-100 (Windows) and/or T-101 (macOS) checklist
    evidence exists. **Compiling does not prove real window management works.**
-5. Only then: create and push the annotated tag (maintainer, from a clean `main`):
+5. A green **dry-run dispatch** of `release.yml` on `main` (all four build + all four smoke jobs
+   green, no release created) — see §3.3.
+6. Only then: create and push the annotated tag (maintainer, from a clean `main`):
 
    ```sh
    git checkout main
@@ -90,20 +95,41 @@ artifacts (and breaking the draft release with duplicate asset names).
 
 1. `build` — 4 jobs in parallel (one per OS/arch). Each: checkout → Node 22 (npm cache) →
    `npm ci` → build `shared` → build `agent` → `npx electron-builder <targets> --publish never` →
-   upload installers as workflow artifacts.
-2. `smoke` — **currently disabled** (`if: false`). It is the T-113 job: launch each packaged app with
-   `AGENT_SMOKE=1`, expect it to start headless, bind the loopback port, answer one `hello` and exit 0.
-   It cannot be enabled until the `AGENT_SMOKE` hook exists in `agent/src/main.ts` (§8) — enabling it
-   earlier would either hang on a GUI or fake a pass.
-3. `release` — tag pushes only: downloads all artifacts, generates `SHA256SUMS.txt`, creates a
-   **draft** GitHub Release with `gh release create --draft`. `workflow_dispatch` runs skip this job
-   (build-only dry run).
+   upload installers as workflow artifacts (`focus-agent-<name>`).
+2. `smoke` — 4 jobs in parallel (T-113), one per build job (`needs: build`). Each job
+   (a) downloads that OS's installer artifact, asserts every expected extension is present, size
+   > 1 MB, and prints its sha256; (b) runs `node scripts/smoke/launch.mjs`, which starts the agent
+   with `AGENT_SMOKE=1`, waits for its single `SMOKE_READY port=<n>` line, connects a real `ws`
+   client, asserts `hello.paired=false` + `hello.state=IDLE`, sends `getState`, asserts
+   `state=IDLE` with no session, and requires the agent to exit 0 on its own (its 20 s failsafe
+   exits 1; the launcher fails on any deviation). Linux runs it under `xvfb-run`. Each job uploads
+   `smoke-log-<name>`. **HONEST LIMITATION:** launch.mjs resolves Electron from the checkout and
+   drives the source-built `agent/dist`, so the smoke proves the packaged code + Electron boot
+   headless — *not* that the installed dmg/exe/AppImage itself boots. Installer-level launch is the
+   T-113 follow-up in §8, and the draft release stays draft until a human runs the real install
+   checklist (§3.4).
+3. `release` — tag pushes only and `needs: [build, smoke]`: downloads only the `focus-agent-*`
+   installer artifacts (smoke logs excluded), generates `SHA256SUMS.txt`, creates a **draft**
+   GitHub Release with `gh release create --draft`. `workflow_dispatch` runs skip this job
+   (build + smoke only dry run).
 
-### 3.3 Dry run without releasing
+### 3.3 Dry run without releasing (validated in W4)
 
-Actions → **Release** → *Run workflow* (`workflow_dispatch`) on any branch. All four build jobs run
-and upload artifacts; the release job is skipped. Use this to validate packaging changes before
-tagging.
+Actions → **Release** → *Run workflow* (`workflow_dispatch`), or from a machine with `gh`:
+
+```sh
+gh workflow run release.yml --ref main
+gh run list --workflow release.yml --limit 1     # get the run id
+gh run watch <run-id> --exit-status              # wait for build + smoke
+gh run view <run-id> --json conclusion,artifacts # real artifact names/sizes
+```
+
+The workflow file must already be on `main` for `gh workflow run … --ref main` to work. All four
+build jobs and all four smoke jobs run; **the release job is skipped** because
+`github.ref` is `refs/heads/main`. Artifacts produced by a dry run are `focus-agent-<name>`
+(installers) and `smoke-log-<name>` (per-OS AGENT_SMOKE log), retention 14 days. This is the
+mandatory pre-flight check before tagging (§3.1) and produces the canonical first real installers
+for manual install verification (§6).
 
 ### 3.4 Publish
 
@@ -247,7 +273,8 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 
 | Item | Status | Notes |
 |---|---|---|
-| `AGENT_SMOKE=1` launch hook (T-113) | **BLOCKED** | No hook in `agent/src/main.ts` as of 2026-11-10 (verified by grep). Needed contract: headless start, bind `127.0.0.1:AGENT_PORT`, answer one `hello`, `app.exit(0)`; non-zero exit otherwise. `smoke` job is present but `if: false`. |
+| `AGENT_SMOKE=1` launch hook + per-OS smoke job (T-113) | **DONE (W4)** | `agent/src/main.ts` has the hook; `scripts/smoke/launch.mjs` proven locally and the `smoke` job now runs on every OS (`needs: build`) and gates the draft release (`release.needs: [build, smoke]`). Asserts installers exist + sha256, `SMOKE_READY`, `hello.paired=false`, `getState.state=IDLE`, self exit 0 within 20 s. Linux under Xvfb. |
+| Installer-level launch (T-113 follow-up) | OPEN | The smoke job drives the source-built `agent/dist` (launcher resolves Electron from the checkout); it does **not** launch the installed dmg/exe/AppImage out of the package. Extending `launch.mjs` to accept a packaged binary/app dir is the follow-up; until then real installs are the human checklist (§3.4). |
 | Auto-update | Not implemented (P2) | No `electron-updater`, no `latest.yml`/blockmap feed. |
 | `rpm` | Not built | Optional; would need `rpm` tools on the Ubuntu runner. |
 | macOS Intel runner | Deprecated eventually | `macos-15-intel` retires fall 2027 (TD §16) — plan universal build or drop x64 via an ADR before then. |
@@ -259,7 +286,43 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 
 ---
 
-## 9. Ownership & change control
+## 9. Dependency updates (Dependabot) & audit gating
+
+Policy: **every dependency bump is a human-reviewed PR — no auto-merge** (AGENTS.md §6 + DEC-009).
+`.github/dependabot.yml` opens grouped PRs weekly (Mondays 04:00 UTC):
+
+- **npm** (root workspace lockfile): one grouped PR for all minor/patch updates; major bumps stay
+  individual. `typescript` and `@types/node` major updates are ignored on purpose (TypeScript is
+  hard-pinned 5.9.3 because `typescript-eslint@8.x` peer-requires `<6.1.0`; `@types/node` 22.x maps
+  to the Node 22 API surface per DEC-001).
+- **GitHub Actions**: one grouped PR per week; Dependabot updates the pinned SHA + the `# vX.Y.Z`
+  comment together.
+
+### Audit gating decision (T-115, 2026-11-10)
+
+`npm audit --omit=dev` currently reports:
+
+```
+found 0 vulnerabilities
+```
+
+The only findings in the tree are `14 moderate` **dev-only** transients in the
+`typescript-eslint@8.72.2` dependency chain (`@typescript-eslint/*`), which are not shipped in any
+artifact and are excluded by `--omit=dev`. Decision: the CI step **flipped from report-only to
+blocking** at `--audit-level=critical` (`ci.yml` → *Audit production dependencies (blocking on
+critical)*). With zero production advisories today this cannot false-fail the tree, and a future
+*critical* production advisory now fails the PR instead of scrolling past. Moderate/high production
+findings still do not fail CI — they are triaged at wave gates (`npm audit` output recorded in
+`docs/AGENT_STATUS.md`/`docs/QA_REPORT.md`).
+
+If the blocking audit ever fails: fix or upgrade in the same PR; if no fix exists, do **not** delete
+the step — get A0 approval, record the advisory in `docs/KNOWN_ISSUES.md` with severity and a
+re-review date, and only then add a narrowly documented ignore (`npm audit fix` / advisory-id
+allowlist), never `--force` in CI.
+
+---
+
+## 10. Ownership & change control
 
 - `agent/electron-builder.yml`, `.github/workflows/release.yml`, `agent/build/**`, `docs/RELEASING.md`
   are A10-owned; review with A7 for agent-runtime impact and A0 for release policy.

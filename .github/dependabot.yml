@@ -1,0 +1,61 @@
+# Dependabot configuration (task T-115).
+# Weekly grouped PRs for npm (root workspace lockfile) and GitHub Actions. Deliberately no
+# auto-merge: AGENTS.md §6 + DEC-009 require dependency upgrades to be reviewed and deliberate,
+# and exact pins are only bumped by a human-reviewed PR. Dependabot opens PRs; the CI matrix
+# (unit/integration/E2E + gitleaks + CodeQL) gates them like any other change.
+version: 2
+
+updates:
+  # npm dependencies — one lockfile at the repository root (npm workspaces shared/server/client/agent).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(deps)'
+      prefix-development: 'chore(deps-dev)'
+    labels:
+      - dependencies
+    # Group every minor/patch bump into one PR per ecosystem. Major (breaking) bumps stay as
+    # individual PRs so each one gets a deliberate review and an ADR when relevant.
+    groups:
+      npm-minor-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # DEC-009 / AGENTS.md §4: TypeScript is hard-pinned to 5.9.3 because typescript-eslint
+      # 8.x peer-requires <6.1.0. A 6.x/7.x PR would be red by definition.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      # DEC-001: code targets the Node 22 API surface (@types/node 22.x).
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
+
+  # GitHub Actions — keep the SHA-pinned actions current (Dependabot understands `uses:` pins
+  # and opens a PR with the new SHA + version comment). One grouped PR per week.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'ci(deps)'
+    labels:
+      - dependencies
+      - ci
+    groups:
+      github-actions:
+        patterns:
+          - '*'

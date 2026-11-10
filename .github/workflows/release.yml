@@ -1,10 +1,11 @@
-# Focus Mode — desktop release pipeline (task T-112).
+# Focus Mode — desktop release pipeline (T-112 + T-113).
 # Triggered by a maintainer-pushed `v*` tag (or manually via workflow_dispatch = dry-run build,
 # no release). Each runner builds installers for its own OS with electron-builder and uploads
-# them as workflow artifacts; a final job creates a DRAFT GitHub release from those artifacts
-# on tag pushes only. Signing/notarisation is optional — every job must pass unsigned.
+# them as workflow artifacts; a per-OS smoke job proves the agent boots headless; a final job
+# creates a DRAFT GitHub release from the installer artifacts on tag pushes only.
+# Signing/notarisation is optional — every job must pass unsigned.
 # Third-party actions are pinned to full 40-char commit SHAs with their source tag in a comment
-# (resolved 2026-11-10 with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
+# (re-verified 2026-11-10 with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).
 name: Release
 
 on:
@@ -19,6 +20,11 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Release builds do not run server tests, so skip mongodb-memory-server's ~100 MB mongod
+  # postinstall download on every runner (it is only needed by `npm test`).
+  MONGOMS_DISABLE_POSTINSTALL: 'true'
 
 jobs:
   build:
@@ -104,60 +110,151 @@ jobs:
           retention-days: 14
 
   smoke:
-    # BLOCKED for T-113 (as of 2026-11-10): agent/src/main.ts has no AGENT_SMOKE hook.
-    # Required hook contract: when AGENT_SMOKE=1 the packaged agent starts headless
-    # (AGENT_HEADLESS=1 style), binds 127.0.0.1:AGENT_PORT, answers exactly one `hello`,
-    # writes the bound port to stdout and calls app.exit(0); anything else exits non-zero.
-    # When A7 adds it, flip `if: false` to `if: always() && needs.build.result == 'success'`,
-    # add a per-OS launcher (e.g. scripts/smoke/launch.mjs that unpacks/installs the artifact
-    # and runs it), and add `smoke` to the release job's `needs`.
+    # T-113: real AGENT_SMOKE run on every OS. This job asserts BOTH:
+    #   1. the build job really produced the expected installers for this OS — they are downloaded
+    #      here and each file's size + sha256 is printed (`focus-agent-<name>` artifact);
+    #   2. the agent starts with AGENT_SMOKE=1, binds 127.0.0.1, answers one `hello`
+    #      (paired=false, IDLE), answers `getState` (IDLE, no session) and exits 0 by itself —
+    #      scripts/smoke/launch.mjs fails with exit 1 on any deviation (its 20 s failsafe exits 1).
+    # HONEST LIMITATION: launch.mjs resolves the Electron executable from the checkout and drives
+    # the app directory built from source (`agent/dist`), so it does NOT prove the *installed*
+    # artifact boots out of the asar/dmg/exe/AppImage. Installer-level launch needs a launcher
+    # extension (tracked as a T-113 follow-up in docs/RELEASING.md §8); this job never claims it.
     name: smoke (${{ matrix.name }})
-    if: false
     needs: build
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: windows-x64
             os: windows-latest
+            installer-extensions: .exe
           - name: macos-arm64
             os: macos-latest
+            installer-extensions: .dmg,.zip
           - name: macos-x64
             os: macos-15-intel
+            installer-extensions: .dmg,.zip
           - name: linux-x64
             os: ubuntu-24.04
+            installer-extensions: .AppImage,.deb
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download installers
+      - name: Setup Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build shared protocol package
+        run: npm run build --workspace shared
+
+      - name: Build Focus Agent
+        run: npm run build --workspace agent
+
+      - name: Download installers produced by the build job
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: focus-agent-${{ matrix.name }}
           path: smoke-assets
 
-      - name: Launch packaged app in smoke mode (expects exit 0)
+      - name: Verify installer artifacts (sizes + sha256)
+        shell: bash
         env:
-          AGENT_SMOKE: '1'
-          AGENT_HEADLESS: '1'
-          AGENT_USER_DATA_DIR: ${{ runner.temp }}/agent-smoke-profile
-        run: node scripts/smoke/launch.mjs "${{ matrix.name }}" smoke-assets
+          INSTALLER_EXTENSIONS: ${{ matrix.installer-extensions }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+
+          const dir = 'smoke-assets';
+          const expected = process.env.INSTALLER_EXTENSIONS.split(',').map((e) => e.trim()).filter(Boolean);
+          const files = fs.existsSync(dir)
+            ? fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile()).sort()
+            : [];
+          let failures = 0;
+          for (const file of files) {
+            const full = path.join(dir, file);
+            const size = fs.statSync(full).size;
+            const sha256 = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+            console.log(`${file}\t${size} bytes\tsha256=${sha256}`);
+            if (size < 1024 * 1024) {
+              console.log(`FAIL installer ${file} is suspiciously small (${size} bytes)`);
+              failures++;
+            }
+          }
+          for (const ext of expected) {
+            if (!files.some((f) => f.endsWith(ext))) {
+              console.log(`FAIL missing expected installer extension ${ext}`);
+              failures++;
+            }
+          }
+          console.log(
+            failures === 0
+              ? `PASS installer artifacts present: ${files.length} file(s), expected [${expected.join(', ')}]`
+              : `FAIL ${failures} installer artifact check(s) failed`,
+          );
+          process.exit(failures === 0 ? 0 : 1);
+          NODE
+
+      # Chromium needs a display on Linux; the headless smoke app is launched under Xvfb.
+      - name: Install Xvfb if the runner image lacks it
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq xvfb
+          fi
+
+      - name: AGENT_SMOKE run (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a node scripts/smoke/launch.mjs 2>&1 | tee smoke.log
+
+      - name: AGENT_SMOKE run (Windows/macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/smoke/launch.mjs 2>&1 | tee smoke.log
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-log-${{ matrix.name }}
+          path: smoke.log
+          if-no-files-found: warn
+          retention-days: 14
 
   release:
     name: publish draft GitHub release
-    # Tag pushes only: workflow_dispatch runs are build-only dry runs.
+    # Tag pushes only: workflow_dispatch runs are build+smoke-only dry runs.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    # Both the installers and the per-OS AGENT_SMOKE runs must be green before a draft exists.
+    needs: [build, smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # `pattern` keeps the smoke-log-* artifacts out of the release assets.
       - name: Download all installer artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: focus-agent-*
           path: release-assets
           merge-multiple: true
 

@@ -70,12 +70,14 @@ jobs:
           MONGOMS_DOWNLOAD_DIR: ${{ runner.temp }}/mongodb-binaries
         run: npm test
 
-      # Report-only for now (T-111): production dependency audit. Flip to blocking after
-      # the W6 security wave triages findings (T-115). One OS is enough — same lockfile.
-      - name: Audit production dependencies (report-only)
+      # Blocking since T-115 (was report-only in T-111): `npm audit --omit=dev` currently reports
+      # 0 production vulnerabilities, so `--audit-level=critical` cannot false-fail on today's
+      # tree, while a future critical production advisory now fails the PR instead of scrolling by.
+      # Dev-only moderate transients are excluded by `--omit=dev` (decision + evidence:
+      # docs/RELEASING.md §10). One OS is enough — every OS audits the same lockfile.
+      - name: Audit production dependencies (blocking on critical)
         if: runner.os == 'Linux'
         run: npm audit --omit=dev --audit-level=critical
-        continue-on-error: true
 
   secret-scan:
     # PR-only: stop secrets before they reach main (T-111 requirement 5; extended in T-115).
