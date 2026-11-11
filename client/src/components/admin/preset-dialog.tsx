@@ -64,6 +64,9 @@ export function PresetDialog({ preset, onClose }: PresetDialogProps) {
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'apps' });
   const { errors, isSubmitting } = form.formState;
+  // react-hook-form reports array-level resolver errors (min/max/refine) on `apps.root`, not on
+  // `apps.message`; read both so the shared "App keys must be unique" message is actually shown.
+  const appsError = errors.apps?.root?.message ?? errors.apps?.message;
 
   async function onSubmit(values: PresetFormValues): Promise<void> {
     setBanner(null);
@@ -182,9 +185,9 @@ export function PresetDialog({ preset, onClose }: PresetDialogProps) {
             ))}
           </ul>
 
-          {errors.apps?.message === undefined ? null : (
+          {appsError === undefined ? null : (
             <p role="alert" className="mt-2 text-[13px] font-medium text-danger-text">
-              {errors.apps.message}
+              {appsError}
             </p>
           )}
 

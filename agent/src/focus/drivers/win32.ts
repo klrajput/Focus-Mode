@@ -317,8 +317,10 @@ export function createWin32NativeApi(): Win32NativeApi {
           const style = toNumber(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)) ?? 0;
           const toolWindow = (style & WS_EX_TOOLWINDOW) !== 0;
           const cloaked = cloakedFlag(hwnd);
-          // Expensive process lookup only for windows that could still be candidates.
-          if (!visible || iconic || hasOwner || toolWindow || cloaked) {
+          // Expensive process lookup only for windows that can still be identified. Iconic windows
+          // must keep their identity too: `restore()` re-enumerates and compares the executable
+          // before un-minimising, so dropping it here would make every restore skip its window.
+          if (!visible || hasOwner || toolWindow || cloaked) {
             windows.push({
               handle: String(hwnd),
               visible,

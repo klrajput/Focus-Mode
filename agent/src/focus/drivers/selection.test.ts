@@ -175,6 +175,20 @@ describe('detectCapabilities (hello)', () => {
     expect(detectCapabilities(() => invalid).focus).toBe('unsupported');
   });
 
+  it('degrades a non-object capability report to unsupported', () => {
+    for (const invalid of [null, 'full', 42, undefined]) {
+      const capabilities = detectCapabilities(() => invalid as unknown as AgentCapabilities);
+      expect(capabilities.focus, String(invalid)).toBe('unsupported');
+      expect(capabilities.reasons?.[0]).toMatch(/invalid capabilities/);
+    }
+  });
+
+  it('drops non-string reasons instead of forwarding them', () => {
+    const raw = { focus: 'partial', reasons: [42, null, '  keep me  '] };
+    const capabilities = detectCapabilities(() => raw as unknown as AgentCapabilities);
+    expect(capabilities).toEqual({ focus: 'partial', reasons: ['keep me'] });
+  });
+
   it('trims, bounds and caps reasons to the frozen wire schema', () => {
     const reasons = Array.from({ length: 12 }, (_, index) => `  reason ${index}  `);
     const capabilities = detectCapabilities(() => ({ focus: 'partial', reasons }));

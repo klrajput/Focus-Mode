@@ -4,8 +4,10 @@
 // `unsupported` with a reason, `wmctrl -l -p` is parsed for id/pid ONLY (never the title column),
 // and every command is an execFile argument array with a validated window id.
 
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WindowRef } from '../../allowlist.js';
 import { noopLogger } from '../../log.js';
 import { CommandError, type CommandRunner } from './exec.js';
@@ -127,6 +129,26 @@ describe('wmctrl listing parsing (id/pid only — INV-6)', () => {
     const read = (): string | undefined => 'code';
     expect(parseWmctrlListing('', read)).toEqual([]);
     expect(parseWmctrlListing('garbage\n0x0000\n', read)).toEqual([]);
+    expect(parseWmctrlListing('   \n\t\n', read)).toEqual([]);
+  });
+
+  it('rejects non-numeric, zero, negative, oversized and duplicate rows', () => {
+    const read = (): string | undefined => 'code';
+    const listing = [
+      '0xAA  0 abc host a', // pid is not numeric
+      '0xAB  0 0 host b', // pid 0 can never be a real window process
+      '0xAC  0 -5 host c', // negative pid
+      '0xAD  0 12345678901 host d', // more digits than a PID can have
+      '0xAE  0 42 host e',
+      '0xae  0 42 host f', // same window id, different case
+    ].join('\r\n');
+    expect(parseWmctrlListing(listing, read).map((ref) => ref.handle)).toEqual(['0xae']);
+  });
+
+  it('splits on any run of whitespace and tolerates CRLF listings', () => {
+    const read = (): string | undefined => 'code';
+    const refs = parseWmctrlListing('0x03A0000F\t0\t2000\thost\ttitle', read);
+    expect(refs).toEqual([{ handle: '0x03a0000f', appKey: 'code', identifier: 'code' }]);
   });
 });
 
@@ -314,5 +336,95 @@ describe('Linux restore', () => {
     const { os, driver } = makeHarness({}, seedListing);
     await expect(driver.restore({ sessionId: SESSION_ID, windows: [] })).resolves.toEqual([]);
     expect(os.calls).toEqual([]);
+  });
+
+  it('reports nothing when wmctrl and the xdotool fallback both fail', async () => {
+    const debug = vi.fn();
+    const { os, driver } = makeHarness(
+      { logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug } },
+      seedListing,
+    );
+    os.failWhen = (file, args) =>
+      (file === WMCTRL && args[0] === '-i') || (file === XDOTOOL && args[0] === 'windowmap');
+
+    await expect(
+      driver.restore({
+        sessionId: SESSION_ID,
+        windows: [refFor('0x03a00001', 'code', 'code')],
+      }),
+    ).resolves.toEqual([]);
+    expect(os.calls.slice(1)).toEqual([
+      { file: WMCTRL, args: ['-i', '-r', '0x03a00001', '-b', 'remove,hidden'] },
+      { file: XDOTOOL, args: ['windowmap', '0x03a00001'] },
+    ]);
+    expect(debug).toHaveBeenCalledWith(
+      'xdotool windowmap fallback failed',
+      expect.objectContaining({ handle: '0x03a00001' }),
+    );
+  });
+});
+
+describe('Linux defaults (no injected seams)', () => {
+  it('resolves wmctrl and xdotool from PATH', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'focus-x11-tools-'));
+    try {
+      for (const tool of [path.basename(WMCTRL), path.basename(XDOTOOL)]) {
+        const file = path.join(directory, tool);
+        writeFileSync(file, '#!/bin/sh\nexit 0\n');
+        chmodSync(file, 0o755);
+      }
+      const driver = new LinuxX11Driver({
+        platform: 'linux',
+        env: { PATH: directory, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11' },
+        commandRunner: async () => ({ stdout: '', stderr: '' }),
+        readProcessName: () => undefined,
+        logger: noopLogger,
+      });
+      expect(driver.capabilities()).toEqual({ focus: 'full' });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reports unsupported when PATH has no wmctrl (default finder)', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'focus-x11-empty-'));
+    try {
+      const driver = new LinuxX11Driver({
+        platform: 'linux',
+        env: { PATH: directory, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11' },
+        commandRunner: async () => ({ stdout: '', stderr: '' }),
+        logger: noopLogger,
+      });
+      expect(driver.capabilities().focus).toBe('unsupported');
+      expect(driver.capabilities().reasons?.[0]).toMatch(/wmctrl/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reads process names from /proc and treats an unreadable entry as unknown', async () => {
+    const os = new FakeX11();
+    // 4294967295 is outside every Linux PID range, so /proc cannot have it.
+    os.listing = '0x03a00009  0 4294967295 host Private Document';
+    const driver = new LinuxX11Driver({
+      platform: 'linux',
+      env: { PATH: '/usr/bin', DISPLAY: ':0', XDG_SESSION_TYPE: 'x11' },
+      commandRunner: os.runner,
+      findTool: os.findTool,
+      logger: noopLogger,
+    });
+    await expect(driver.listWindows()).resolves.toEqual([]);
+  });
+});
+
+describe('Linux identity matching', () => {
+  it('matches a journaled ref that has no identifier by its window id alone', async () => {
+    const { os, driver } = makeHarness({}, seedListing);
+    const changed = await driver.asideWindows([{ handle: '0x03A00001', appKey: 'code' }]);
+    expect(changed).toEqual([{ handle: '0x03a00001', appKey: 'code' }]);
+    expect(os.calls.at(-1)).toEqual({
+      file: XDOTOOL,
+      args: ['windowminimize', '0x03a00001'],
+    });
   });
 });

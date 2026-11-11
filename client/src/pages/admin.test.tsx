@@ -122,6 +122,46 @@ afterEach(() => {
 });
 
 describe('AdminPage tabs', () => {
+  it('moves between tabs with the arrow keys, wrapping at both ends', async () => {
+    const user = userEvent.setup();
+    installFetch((url) => {
+      if (url.includes('/admin/users')) return fakeResponse(pageOf([KABIR]));
+      if (url.includes('/admin/presets')) return fakeResponse(pageOf([]));
+      if (url.includes('/admin/agent-links')) return fakeResponse(pageOf([]));
+      if (url.endsWith('/admin/stats')) return fakeResponse(success(STATS));
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    renderAdmin();
+    await screen.findByText('kabir@demo.com');
+
+    const usersTab = screen.getByRole('tab', { name: 'Users' });
+    usersTab.focus();
+
+    await user.keyboard('{ArrowRight}');
+    const presetsTab = screen.getByRole('tab', { name: 'Presets' });
+    expect(presetsTab).toHaveAttribute('aria-selected', 'true');
+    expect(presetsTab).toHaveFocus();
+
+    await user.keyboard('{ArrowLeft}');
+    expect(usersTab).toHaveAttribute('aria-selected', 'true');
+    expect(usersTab).toHaveFocus();
+
+    // Left from the first tab wraps to the last one.
+    await user.keyboard('{ArrowLeft}');
+    const statsTab = screen.getByRole('tab', { name: 'Stats' });
+    expect(statsTab).toHaveAttribute('aria-selected', 'true');
+    expect(statsTab).toHaveFocus();
+
+    // Right from the last tab wraps back to the first.
+    await user.keyboard('{ArrowRight}');
+    expect(usersTab).toHaveAttribute('aria-selected', 'true');
+
+    // Any other key is ignored by the roving-tabindex handler.
+    await user.keyboard('x');
+    expect(usersTab).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('lists users and moves between pages', async () => {
     const user = userEvent.setup();
     installFetch((url) => {
@@ -479,5 +519,123 @@ describe('AdminPage tabs', () => {
       await screen.findByRole('heading', { name: "403 — You don't have access" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Users' })).not.toBeInTheDocument();
+  });
+
+  it('edits a download link', async () => {
+    const user = userEvent.setup();
+    let links = [MAC_LINK];
+    const fetchMock = installFetch((url, init) => {
+      if (url.includes('/admin/users')) return fakeResponse(pageOf([KABIR]));
+      if (!url.includes('/admin/agent-links')) throw new Error(`unexpected request: ${url}`);
+      if (methodOf(init) === 'PATCH') {
+        const body = bodyOf(init);
+        links = links.map((link) =>
+          link.id === MAC_LINK.id ? { ...link, ...body } : link,
+        ) as AgentLink[];
+        return fakeResponse(success(links[0]));
+      }
+      return fakeResponse(pageOf(links));
+    });
+
+    renderAdmin();
+    await screen.findByText('kabir@demo.com');
+    await user.click(screen.getByRole('tab', { name: 'Agent links' }));
+
+    const row = (await screen.findByText(MAC_LINK.url)).closest('li');
+    if (row === null) throw new Error('link row not rendered');
+    await user.click(within(row).getByRole('button', { name: 'Edit' }));
+
+    const dialog = await screen.findByRole('dialog');
+    const label = within(dialog).getByLabelText(/^Label/);
+    await user.clear(label);
+    await user.type(label, 'Focus Agent for macOS (universal)');
+    await user.click(within(dialog).getByRole('button', { name: 'Save link' }));
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([, init]) => methodOf(init ?? {}) === 'PATCH');
+      expect(patch).toBeDefined();
+      expect(JSON.parse(String((patch?.[1] as RequestInit).body))).toMatchObject({
+        label: 'Focus Agent for macOS (universal)',
+      });
+    });
+    expect(await screen.findByText('Focus Agent for macOS (universal)')).toBeInTheDocument();
+  });
+
+  it('cancels or confirms deleting a download link', async () => {
+    const user = userEvent.setup();
+    let links = [MAC_LINK];
+    const fetchMock = installFetch((url, init) => {
+      if (url.includes('/admin/users')) return fakeResponse(pageOf([KABIR]));
+      if (!url.includes('/admin/agent-links')) throw new Error(`unexpected request: ${url}`);
+      if (methodOf(init) === 'DELETE') {
+        links = links.filter((link) => link.id !== MAC_LINK.id);
+        return fakeResponse(success({ id: MAC_LINK.id }));
+      }
+      return fakeResponse(pageOf(links));
+    });
+
+    renderAdmin();
+    await screen.findByText('kabir@demo.com');
+    await user.click(screen.getByRole('tab', { name: 'Agent links' }));
+    await screen.findByText(MAC_LINK.url);
+
+    // Cancel closes the confirmation without calling the API.
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    const confirm = await screen.findByRole('dialog', {
+      name: 'Delete this download link?',
+    });
+    expect(within(confirm).getByText(/downloads will disappear/)).toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: 'Delete this download link?' }),
+      ).not.toBeInTheDocument();
+    });
+    expect(fetchMock.mock.calls.some(([, init]) => methodOf(init ?? {}) === 'DELETE')).toBe(false);
+
+    // Confirming deletes the link and removes the row.
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    const reopened = await screen.findByRole('dialog', { name: 'Delete this download link?' });
+    await user.click(within(reopened).getByRole('button', { name: 'Delete link' }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([, init]) => methodOf(init ?? {}) === 'DELETE')).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(MAC_LINK.url)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole('dialog', { name: 'Delete this download link?' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the delete dialog open with an error when the request fails', async () => {
+    const user = userEvent.setup();
+    installFetch((url, init) => {
+      if (url.includes('/admin/users')) return fakeResponse(pageOf([KABIR]));
+      if (!url.includes('/admin/agent-links')) throw new Error(`unexpected request: ${url}`);
+      if (methodOf(init) === 'DELETE') {
+        return fakeResponse(
+          { success: false, error: { code: 'INTERNAL', message: 'Database unavailable' } },
+          500,
+        );
+      }
+      return fakeResponse(pageOf([MAC_LINK]));
+    });
+
+    renderAdmin();
+    await screen.findByText('kabir@demo.com');
+    await user.click(screen.getByRole('tab', { name: 'Agent links' }));
+    await screen.findByText(MAC_LINK.url);
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete this download link?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete link' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Something went wrong on our side. Please try again.',
+    );
+    expect(screen.getByRole('dialog', { name: 'Delete this download link?' })).toBeInTheDocument();
+    expect(screen.getByText(MAC_LINK.url)).toBeInTheDocument();
   });
 });

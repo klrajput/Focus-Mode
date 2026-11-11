@@ -31,7 +31,12 @@ function manualUuidV4(): string {
 export function newClientSessionId(): string {
   const cryptoApi = globalThis.crypto;
   if (typeof cryptoApi?.randomUUID === 'function') {
-    return cryptoApi.randomUUID();
+    try {
+      return cryptoApi.randomUUID();
+    } catch {
+      // Some WebViews expose `randomUUID` but throw when the context is not secure. A focus
+      // session must still start, so fall back to the local v4 generator instead of failing.
+    }
   }
   return manualUuidV4();
 }
