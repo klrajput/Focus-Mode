@@ -115,7 +115,13 @@ describe('verifyEdDsaJwt', () => {
 
   it('rejects a tampered signature as 401 UNAUTHENTICATED', () => {
     const [header, payload, signature = ''] = signEdDsaJwt(PAYLOAD, keys.privatePem).split('.');
-    const flipped = `${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`;
+    // Tamper DETERMINISTICALLY: flip a bit in the decoded Ed25519 signature bytes. Mutating the
+    // last base64url character is NOT reliable — its two least-significant bits are padding, so
+    // some substitutions decode to the identical 64-byte signature and the token stays valid
+    // (this flaked on the macOS/Windows CI runners).
+    const signatureBytes = Buffer.from(signature, 'base64url');
+    signatureBytes[10] = (signatureBytes[10] ?? 0) ^ 0x01;
+    const flipped = signatureBytes.toString('base64url');
 
     expectAppError(
       () => verifyEdDsaJwt(`${header}.${payload}.${flipped}`, keys.publicPem),
