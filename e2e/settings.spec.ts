@@ -157,6 +157,12 @@ test.describe('Settings — download links (contract §3.1 #25)', () => {
     await signInViaUi(page, DEMO_USER);
     await page.goto('/settings');
     await expect(page).toHaveURL(/\/settings$/);
+    // /settings is a lazy route (A4's route split) and the download section fetches
+    // GET /agent-links after mount — wait for the real links instead of reading them mid-fetch.
+    await expect(page.getByRole('heading', { level: 1, name: /Settings/ }).first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.locator('a[href^="http"]').first()).toBeVisible({ timeout: 20_000 });
 
     const anchors = page.locator('a[href^="http"]');
     const count = await anchors.count();

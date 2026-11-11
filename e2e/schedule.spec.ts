@@ -39,7 +39,7 @@ import { endFocusFromAgentWindow, stubNativeAgentDialogs } from './helpers/focus
 import { pairAgentViaUi } from './helpers/pairing';
 
 /** How far ahead the schedule is put so we never race a minute boundary at creation time. */
-const LEAD_MINUTES = 2;
+const LEAD_MINUTES = 3;
 /** DEC-013 seed: both demo users have this IANA timezone; schedules are interpreted in it. */
 const USER_TIMEZONE = 'Asia/Kolkata';
 const WEEKDAY_INDEX: Record<string, number> = {
@@ -122,6 +122,17 @@ test.describe('Scheduled focus session (real scheduler)', () => {
       // scheduled >=10 s heads-up is a native notification + tray/window affordance that auto-starts
       // when its window elapses, so no dialog needs stubbing for the accept path.
       await stubNativeAgentDialogs(agent);
+
+      // Prove the dashboard↔agent local channel is captured + authenticated before the long wait:
+      // `page.on('websocket')` only sees sockets opened after registration, and the pairing nudge
+      // can recreate the socket. If this fails, the due-time heads-up could never be observed.
+      await expect
+        .poll(() => localFrames.length, {
+          timeout: 30_000,
+          intervals: [250],
+          message: 'the dashboard↔agent local WebSocket frames were never captured',
+        })
+        .toBeGreaterThan(0);
 
       const due = dueIn(LEAD_MINUTES);
       let schedule: ApiSchedule;
