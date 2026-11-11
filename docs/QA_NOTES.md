@@ -193,7 +193,12 @@ the 47-test gate is kept deterministic across repeated runs (two-run evidence in
    page rendered: wait for the route shell (`main`), the route `<h1>`, and — for data-driven sections —
    the real content (`getByRole`/`locator.first()` auto-waits) before asserting counts. This exact
    lesson fixed the W7 `settings` download-links flake.
-8. **No retries as masking.** `retries: 0` for the local gate. When a test flakes, the fixture is
+8. **Identity switches use separate browser contexts.** A spec that audits/acts as two different
+   users (e.g. ADMIN `/admin` then USER `/403`) creates one context per identity instead of clearing
+   `sessionStorage` on a shared page — an in-memory auth swap can race the redirect and make a real
+   page look missing (this was a W8-close-out flake in the axe admin test; fixed with two contexts,
+   no assertion weakened).
+9. **No retries as masking.** `retries: 0` for the local gate. When a test flakes, the fixture is
    fixed (isolation, tolerance, wait strategy) and re-run twice; a second green run is the evidence,
    not a retry count. Load tolerance (parallel workers/other agents on the same machine) is handled by
    generous-but-finite waits on *observable* state, never by sleeping blindly.
@@ -299,3 +304,89 @@ tree; the fixed specs were also re-run individually before the pair (settings 3/
 - **Packaging:** release dry-run `42977816541` = **success**: 4/4 builds, fuses+asar gates green,
   **4/4 source AGENT_SMOKE and 4/4 packaged-artifact smoke** (macOS `.app`, Linux `squashfs-root`,
   Windows `win-unpacked`), **0 GitHub Releases** (tag-only guard).
+
+
+## 10. Final verification (W8/W9 close-out)
+
+Independent A8 re-verification on the merged final tree. `main` at the time of the runs:
+**`010fa25`** (one commit after `f4e0b25`; the delta is comment/doc text only — verified with
+`git show 010fa25` — so the unit numbers below remain valid). Working tree clean apart from the two
+E2E determinism edits this verification required (see §10.2; never assertion weakening).
+
+### 10.1 Unit suites — `npm test` (workspaces, 2026-11-11)
+
+```
+$ npm test            # exit 0 · elapsed 97 s
+shared:  Test Files  8 passed (8)    Tests  175 passed (175)
+server:  Test Files 29 passed (29)   Tests  450 passed (450)
+client:  Test Files 38 passed (38)   Tests  272 passed (272)
+agent:   Test Files 38 passed (38)   Tests  545 passed (545)
+```
+
+Sum: **175 + 450 + 272 + 545 = 1442 tests passed, 0 failed** (shared 8 files, server 29, client 38,
+agent 38 = 113 files). Client includes W10 gamify's 21 new tests (272 vs 251 at W7).
+Re-ran `npm test -w @focus-mode/server` on the exact final HEAD (`010fa25`, comment-only delta):
+**Test Files 29 passed / Tests 450 passed / 92.9 s**, exit 0 — no behavioural change.
+
+### 10.2 Full Playwright E2E — `npx playwright test --reporter=list`
+
+```
+RUN (after determinism fix): 50 passed (7.5m)   [exit 0, retries 0]
+spec breakdown: a11y 3/3 (insights route: 0 violations, 45 axe passes — gamify UI is a11y-clean;
+  the 12 `color-contrast` INCOMPLETE nodes are the Recharts SVG, unchanged/manual-review),
+  insights 2/2 (gamify additions do not break the FR-013 contract), security 8/8, viewport 10/10,
+  schedule 2/2, reconnect 1/1, settings 3/3, admin 3/3, notifications 2/2, pairing/session-reporting/
+  focus/perf/api-sessions/smoke all green.
+```
+
+One flake surfaced in the first close-out run (49/50): the axe admin/403/404 test used a
+`sessionStorage.clear()` identity swap and the AppShell marker wait (default 5 s) lost a race under
+load. Fixed deterministically: **separate browser contexts per identity** in `e2e/a11y.spec.ts` +
+an explicit 20 s shell wait in `e2e/helpers/auth.ts`; no assertion was relaxed. Re-verified: a11y
+spec 3/3, then the full suite 50/50 above.
+
+### 10.3 Real macOS OS proof (DarwinDriver, separate-process verification)
+
+```
+$ npx tsx scripts/verify/macos-focus-smoke.ts
+{"step":"launch-textedit","hidden":false}
+{"step":"driver-capabilities","capabilities":{"focus":"full"}}
+{"step":"enter-focus","state":"FOCUSING","sessionPresent":true,"journalBeforeRestore":true,"events":["focusStarted"]}
+{"step":"verify-aside","hidden":true}
+{"step":"exit-focus","reason":"USER","secondExitWasNoop":true,"actualMinutes":0,"journalCleared":true}
+{"step":"verify-restore","hidden":false,"restored":true}
+{"result":"PASS","os":"darwin","arch":"arm64"}
+```
+
+### 10.4 AGENT_SMOKE (real built Electron agent, loopback protocol)
+
+```
+$ node scripts/smoke/launch.mjs
+PASS AGENT_SMOKE port=64749 hello.paired=false getState.state=IDLE exit=0
+```
+
+### 10.5 CI + release dry-run (GitHub Actions, recorded 2026-11-11)
+
+- **Release dry-run `42977816541` — success** (6 m 8 s, `main`): jobs `build` 4/4 success
+  (windows-x64, linux-x64, macos-arm64, macos-x64) + `smoke` 4/4 success (packaged artifacts);
+  `publish draft GitHub release` = **skipped** (dry run — no GitHub release created).
+- **Latest green `main` CI:** `42982084076` for **`f4e0b25` — success**.
+- **Newest `main` CI `42982156758` for `010fa25` — FAILURE (honest):** macOS `validate` only;
+  `ubuntu-24.04` + `windows-latest` + gitleaks all green. Failing test is a **CI-macOS-only flake**
+  in `server/src/realtime/agentHub.edge.test.ts` ("keeps the socket and later writes working after a
+  presence write fails": `expected 'DISCONNECTED' to be 'CONNECTED'`). The same test also failed the
+  earlier macOS job `42979944082` (commit `7a34e3b`), while the interleaved runs `42980529709`
+  (`b4994c4`) and `42982084076` (`f4e0b25`) were green — this is a recurring flake, not a regression
+  from the final commits (the newest commit only changes a comment + a test description). Recorded as
+  **KI-023** (test flake must be fixed or quarantined; local macOS `npm test` passes 450/450, so it is
+  load/timing-dependent in CI).
+
+### 10.6 Final status
+
+- Unit: **1442/1442** · E2E: **50/50** · real macOS proof: **PASS darwin/arm64** · AGENT_SMOKE:
+  **PASS** · release dry-run: **success with 4/4 packaged smoke** · latest green CI: `42982084076`.
+- Open CI item: the macOS-only `agentHub.edge.test.ts` flake (KI-023) makes the newest docs commit's
+  CI red; ubuntu/windows/gitleaks are green and the immediately preceding `main` commit is fully green.
+- NEEDS-HUMAN unchanged: real Windows/Linux window behaviour (KI-005), headless agent window
+  (KI-009), native consent dialog visuals (KI-011), tray/native notification visuals (KI-013),
+  signing/tag-publish (KI-013/RELEASE_HANDOFF §signing).

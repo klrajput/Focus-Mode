@@ -51,7 +51,7 @@ export async function expectAppShell(page: Page): Promise<void> {
     .getByRole('navigation', { name: 'Main navigation' })
     .first()
     .or(page.getByRole('button', { name: 'Open navigation' }).first());
-  await expect(marker).toBeVisible();
+  await expect(marker).toBeVisible({ timeout: 20_000 });
 }
 
 /** Fill `/signup`, submit, and wait until the new account lands on the dashboard (FR-001). */

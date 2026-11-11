@@ -156,28 +156,35 @@ test.describe('Accessibility — authenticated USER routes (axe)', () => {
 
 test.describe('Accessibility — admin, 403 and 404 pages (axe)', () => {
   test('the ADMIN /admin page and the 403/404 pages have no serious/critical violations', async ({
-    page,
+    browser,
   }) => {
-    await page.setViewportSize(VIEWPORT);
+    // Separate contexts per identity: an ADMIN and a USER session never share storage, so the
+    // audit can never race an in-memory auth swap (this was a real flake in the W8 close-out run).
+    const adminContext = await browser.newContext({ viewport: VIEWPORT });
+    const userContext = await browser.newContext({ viewport: VIEWPORT });
+    try {
+      // ADMIN surface (the densest page: tables, tabs, pagination, destructive buttons).
+      const adminPage = await adminContext.newPage();
+      await signInViaUi(adminPage, DEMO_ADMIN);
+      await adminPage.goto(`${CLIENT_ORIGIN}/admin`);
+      await adminPage.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
+      await expectNoSeriousOrCritical(adminPage, 'admin');
 
-    // ADMIN surface (the densest page: tables, tabs, pagination, destructive buttons).
-    await signInViaUi(page, DEMO_ADMIN);
-    await page.goto(`${CLIENT_ORIGIN}/admin`);
-    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
-    await expectNoSeriousOrCritical(page, 'admin');
+      // 403 page as a USER (the real redirect path, inside the shell).
+      const userPage = await userContext.newPage();
+      await signInViaUi(userPage, DEMO_USER);
+      await userPage.goto(`${CLIENT_ORIGIN}/admin`);
+      await expect(userPage).toHaveURL(/\/403$/);
+      await userPage.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
+      await expectNoSeriousOrCritical(userPage, '403');
 
-    // 403 page as a USER (the real redirect path, inside the shell).
-    await page.evaluate(() => sessionStorage.clear());
-    await page.goto(`${CLIENT_ORIGIN}/login`);
-    await signInViaUi(page, DEMO_USER);
-    await page.goto(`${CLIENT_ORIGIN}/admin`);
-    await expect(page).toHaveURL(/\/403$/);
-    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
-    await expectNoSeriousOrCritical(page, '403');
-
-    // 404 page inside the shell (authenticated 404 is the common mistyped-link path).
-    await page.goto(`${CLIENT_ORIGIN}/this-route-does-not-exist-either`);
-    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
-    await expectNoSeriousOrCritical(page, '404 (authenticated)');
+      // 404 page inside the shell (authenticated 404 is the common mistyped-link path).
+      await userPage.goto(`${CLIENT_ORIGIN}/this-route-does-not-exist-either`);
+      await userPage.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
+      await expectNoSeriousOrCritical(userPage, '404 (authenticated)');
+    } finally {
+      await adminContext.close().catch(() => undefined);
+      await userContext.close().catch(() => undefined);
+    }
   });
 });
