@@ -236,7 +236,7 @@ describe('POST /api/v1/devices/:id/attest (contract §3.1 #11, REC-003)', () => 
   });
 });
 
-describe('attestation nonce replay hardening (W6/SEC-7, delta C-25)', () => {
+describe('attestation nonce replay hardening (W6/SEC-7, delta C-26)', () => {
   it('rejects a replayed (userId, deviceId, nonce) tuple with 409 CONFLICT', async () => {
     const first = await attest(TEST_NONCE);
     expect(first.status).toBe(200);

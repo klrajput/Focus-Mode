@@ -49,7 +49,7 @@ export function getAttestationPublicKey(): AttestationPublicKey {
 }
 
 /**
- * W6/SEC-7 replay cache: every (userId, deviceId, nonce) tuple may be signed once per TTL.
+ * W6/SEC-7, delta C-26 replay cache: every (userId, deviceId, nonce) tuple may be signed once per TTL.
  * Process-local (single API instance, TECHNICAL_DESIGN §8) and insertion-ordered so the map can
  * be pruned deterministically; it never holds the attestation itself, only expiring tick counts.
  */

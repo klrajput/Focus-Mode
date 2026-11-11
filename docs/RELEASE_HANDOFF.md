@@ -227,5 +227,4 @@ delete the bad asset (`gh release delete-asset v0.1.1 <file> --yes`) and re-uplo
 - [ ] Real-OS runtime: Windows window-aside (T-100), macOS installed-app behaviour (T-101/T-102) — **[NEEDS-HUMAN]**
 - [ ] Native visuals/tray verification, demo video (T-128) — **[NEEDS-HUMAN]**
 - [ ] Live deployment of dashboard/API (T-120/T-121, `DEPLOYMENT.md`) — **[NEEDS-HUMAN]**
-- [ ] A1: link this handoff from `README.md` (release section references the older W6 run `42873654284`;
-      the current evidence is run `42977816541` — A1 owns `README.md`).
+- [x] A1: `README.md` links this handoff and quotes run `42977816541` (W7 refresh, `787a75f`); the W6 run `42873654284` remains only as a historical packaging reference.

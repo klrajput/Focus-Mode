@@ -14,7 +14,7 @@
 | Coverage ≥80 % lines | `npx vitest run --coverage` per workspace (W6: shared 100 / server 89.44 / client 80.70 / agent 88.63) | TECHNICAL_DESIGN §14 target |
 | NFR-011 latency | `npx playwright test e2e/perf.spec.ts` → worst p95 **7.22 ms** vs 300 ms | API performance on loopback (see `QA_NOTES.md` §1 caveat) |
 | Security: 0 Critical / 0 High | `docs/SECURITY_REVIEW.md` (148 adversarial checks; 3 Mediums fixed & regression-tested) | SEC-1…SEC-10, auth, IDOR, rate limits, injection, INV-2/3/6 |
-| Fuses + asar on real artifacts | CI run `42873654284` smoke jobs (`fuses/asar gates`), locally re-checkable with §4 | SEC-8 |
+| Fuses + asar on real artifacts | CI run `42977816541` build/verify steps (`fuses/asar gates`), locally re-checkable with §4 | SEC-8 |
 | macOS real hide/restore | `npx tsx scripts/verify/macos-focus-smoke.ts` → `PASS darwin/arm64` | FOCUS-1/2 on the demo OS (DEC-020) |
 
 ## 1. Environment record (fill once per OS run)
@@ -60,22 +60,22 @@ AGENT_LOG_LEVEL=info
 | Windows | `Remove-Item -Recurse -Force "$env:APPDATA\Focus Mode Agent"` |
 | Linux | `rm -rf "$HOME/.config/Focus Mode Agent"` |
 
-## 2. Installers to verify (real CI run `42873654284`)
+## 2. Installers to verify (real CI run `42977816541`)
 
-The W6 packaging run produced these **unsigned workflow artifacts** (not a GitHub Release — releases are maintainer-tagged). Verify the hash **before** installing; a mismatch = STOP.
+The latest successful packaging dry-run produced these **unsigned workflow artifacts** (not a GitHub Release — releases are maintainer-tagged; a real `v*` tag **rebuilds** them, so re-read sizes/sha256 from the tagged run before publishing). Verify the hash **before** installing; a mismatch = STOP.
 
 | OS | File | Bytes | sha256 |
 |---|---|---|---|
-| Windows x64 | `focus-mode-agent-0.1.0-win-setup.exe` | 122,374,953 | `0f117d118b9c0fb8376eaa8aa4cd773377c3cd8147faada20de4f0204e930c44` |
-| Windows x64 | `focus-mode-agent-0.1.0-win-portable.exe` | 111,031,005 | `81e1dc34b5c0b250a4a9b1426bd224248ca892daf063e7a446f8e7b2494f66cf` |
-| macOS arm64 | `focus-mode-agent-0.1.0-mac-arm64.dmg` | 121,218,816 | `74b99cb2a0c4d011105bf6257358b6c714a074ae0f7e9e62b67b15cf46b9d211` |
-| macOS arm64 | `focus-mode-agent-0.1.0-mac-arm64.zip` | 117,687,115 | `475ca59d3a60188314460784e4ed0e79be61f0016e6f0cfda3c2a5741111ca2a` |
-| macOS x64 | `focus-mode-agent-0.1.0-mac-x64.dmg` | 128,118,216 | `35e76a7fb926d2d663cbc557e2a36db852508b409d6d49acc18d47edc06e0a76` |
-| macOS x64 | `focus-mode-agent-0.1.0-mac-x64.zip` | 124,581,952 | `bd43cb8ba7276bee1cb86e4ae0c92588174423ec903fe4f481e401058317137f` |
-| Linux x64 | `focus-mode-agent-0.1.0-linux-x86_64.AppImage` | 127,553,346 | `32f1a1b220b52d19f833b3e8240aa3d8a4d135d0b8e3a454afe056f2a4737449` |
-| Linux x64 | `focus-mode-agent-0.1.0-linux-amd64.deb` | 101,889,864 | `b22027f06c90e50abd22d6787becba34fa1a505ebeaa40c5f4a44767cdc45456` |
+| Windows x64 | `focus-mode-agent-0.1.0-win-setup.exe` | 122,376,423 | `62b132c46f5922dd18f142929ff5a2aa79e43636d2a3785743b9843b3ee8c7ee` |
+| Windows x64 | `focus-mode-agent-0.1.0-win-portable.exe` | 111,031,696 | `625624bada9ddd36e545ca5ebbff024d159ac7b9e8bac782b6d0493e9373ec2e` |
+| macOS arm64 | `focus-mode-agent-0.1.0-mac-arm64.dmg` | 121,227,810 | `803a19540b1f41def8fb8f479e23ca0a88c093aca65f5b60c898c46263ec564d` |
+| macOS arm64 | `focus-mode-agent-0.1.0-mac-arm64.zip` | 117,688,896 | `b4aa3bcedb986343cdc84a717d637903d31142100d6eb5a484fa046cd08514d1` |
+| macOS x64 | `focus-mode-agent-0.1.0-mac-x64.dmg` | 128,119,814 | `ed5b38f2d72efecef631666a8e830a37412c4485058ec554ccb05ba3657730ee` |
+| macOS x64 | `focus-mode-agent-0.1.0-mac-x64.zip` | 124,583,735 | `dcb683c040d051f4becacf3674b8354db9349ff46bec1b3a32b7c49d788ea8eb` |
+| Linux x64 | `focus-mode-agent-0.1.0-linux-x86_64.AppImage` | 127,553,381 | `6ba501ae7b05bf563fe45aa75c56b095da297382a58c74e9a943675696fd058a` |
+| Linux x64 | `focus-mode-agent-0.1.0-linux-amd64.deb` | 101,891,560 | `9db95680ca884aeecb00349b2347e290a5a47e95f72090a0a72f00009960e3dc` |
 
-Facts about the run (verified from its logs): **4/4 build jobs + 4/4 `AGENT_SMOKE` jobs green, fuses/asar gates PASS, `publish draft GitHub release` skipped → 0 GitHub Releases.**
+Facts about the run (verified from its logs): **4/4 build jobs + 4/4 source `AGENT_SMOKE` + 4/4 packaged-artifact smoke green, fuses/asar gates PASS, `publish draft GitHub release` skipped → 0 GitHub Releases.**
 
 ---
 

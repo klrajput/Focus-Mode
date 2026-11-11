@@ -66,7 +66,7 @@ Browsers considered from the agent side are irrelevant here: all nine known brow
 
 ## 6. Installer / artifact matrix (real CI output)
 
-The release workflow has produced **real unsigned installers** on native GitHub runners — dispatch run `42858934575` (2026-11-11): **4/4 build jobs + 4/4 `AGENT_SMOKE` smoke jobs green, and zero GitHub Releases created** (the release job only runs on a maintainer-pushed `v*` tag; the tag-only guard held).
+The release workflow has produced **real unsigned installers** on native GitHub runners — the latest successful dispatch `42977816541` (2026-11-11): **4/4 build jobs + fuses/asar gates + 4/4 source `AGENT_SMOKE` + 4/4 packaged-artifact smoke green, and zero GitHub Releases created** (the release job only runs on a maintainer-pushed `v*` tag; the tag-only guard held). The first installer-producing run was `42858934575` and the W6 fuses run was `42873654284`; sizes/sha256 from the latest dry-run are in `docs/RELEASE_HANDOFF.md` §4 (a real tag rebuilds the files — re-read hashes then).
 
 | OS | Targets | Artifact file names (version `0.1.0` for this build) | Evidence |
 |---|---|---|---|
