@@ -1,42 +1,46 @@
-# Focus Mode — gitleaks configuration (root tooling config; owner A10, A0 hotfix after CI run).
+# Focus Mode — gitleaks configuration (root tooling config; owner A10).
 #
-# The exam requires a secret scan to pass (NFR-004) WITHOUT hiding real leaks. Everything
-# allowlisted below is intentionally public in this repository:
-#   * `.env.example` files contain only `CHANGE_ME_*` placeholders, never secrets;
-#   * the demo seed credentials `admin@demo.com / Admin@123` and `kabir@demo.com / Kabir@123`
-#     are a PDF §19 submission requirement (they must be in the README for evaluators);
-#   * `docs/INTEGRATION_CONTRACTS.md` and other docs contain EXAMPLE payloads (fake JWTs,
-#     fake enrollment secrets, a fake public key) — they are documentation, not credentials;
-#   * `docs/SECURITY_REVIEW.md` / `docs/QA_REPORT.md` will quote attack strings on purpose.
-# Real deployments get real values only through hosting environment variables (never the repo).
+# The exam requires a secret scan to pass (NFR-004) WITHOUT hiding real leaks, so this file is
+# deliberately narrow. **KI-021 fix (W7):** there is NO blanket `*.md` (or `^docs/`) exemption any
+# more — a credential pasted into an arbitrary Markdown file is caught by the scan. Only these
+# specific files are exempt, each audited and listed individually:
+#   * `.env.example` — committed templates that contain ONLY `CHANGE_ME_*` placeholders;
+#   * `docs/INTEGRATION_CONTRACTS.md` — documentation whose JSON examples deliberately contain
+#     fake JWTs / fake HMAC / a fake public key (not credentials; never used at runtime).
+# The exam-mandated public demo credentials (`Admin@123`, `Kabir@123`, `admin@demo.com`,
+# `kabir@demo.com`) are allowlisted by *value* (not by file) because PDF §19 requires them to be
+# public in the README/test docs; they are the only credential-shaped strings accepted anywhere.
+# Real deployments receive real values only through hosting environment variables — never the repo.
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "Documentation, example payloads and the exam-mandated public demo credentials"
+description = "Only the env TEMPLATES are path-exempt (placeholders only, never real values)."
 paths = [
-  '''(^|/)\.env\.example$''',
-  '''^docs/''',
-  '''^PROMPTS\.md$''',
-  '''^README\.md$''',
-  '''^SPEC\.md$''',
-  '''(^|/)\.md$''',
-]
-regexes = [
-  '''CHANGE_ME_[A-Za-z0-9_]+''',
-  '''Admin@123''',
-  '''Kabir@123''',
-  '''(admin|kabir)@demo\.com''',
-  '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+''',
-  '''-----BEGIN [A-Z ]*PUBLIC KEY-----''',
-  '''MCowBQYDK2VwAyEA[A-Za-z0-9+/=]+''',
+  '''(^|/)\.env\.example$''', # committed `.env.example` files: CHANGE_ME_* placeholders only
 ]
 
 [[allowlists]]
-description = "Test-only fixtures: fake throwaway secrets that satisfy SEC-2 length checks are legitimate in test configs and helper files (never used at runtime)."
+description = "The single documentation file that intentionally quotes EXAMPLE secrets in JSON examples (fake JWT/HMAC/public-key). Listed explicitly instead of exempting all Markdown (KI-021)."
 paths = [
-  '''(^|/)vitest\.config\.ts$''',
-  '''(^|/)src/test/''',
+  '''^docs/INTEGRATION_CONTRACTS\.md$''', # contract examples: fake tokens, fake codeHmac, fake public key
+]
+
+[[allowlists]]
+description = "Public exam-mandated demo identities from the seed script (PDF §19 requires them in the README). Allowed by value anywhere because they are intentionally public and rotateable in deployment."
+regexes = [
+  '''CHANGE_ME_[A-Za-z0-9_]+''',      # placeholder convention used by every .env.example
+  '''Admin@123''',                    # seeded ADMIN demo password (documented in README §Test credentials)
+  '''Kabir@123''',                    # seeded USER demo password (same)
+  '''(admin|kabir)@demo\.com''',      # the two seeded demo e-mail addresses
+]
+
+[[allowlists]]
+description = "Test-only fixtures: fake throwaway secrets (JWTs, public keys, device/enroll tokens) satisfy length/format checks in tests and helper files. Tests are never shipped and real secrets must never be committed to them (A9 reviews fixtures at each security pass); this exemption is limited to test files, NOT blanket Markdown."
+paths = [
+  '''(^|/)vitest\.config\.ts$''',      # test runner config
+  '''(^|/)src/test/''',                  # shared test helpers/fixtures
+  '''\.test\.(ts|tsx|mts|cts)$''',      # colocated unit-test files (fake tokens/public keys only)
 ]
 
 [[allowlists]]

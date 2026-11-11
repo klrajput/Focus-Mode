@@ -274,7 +274,7 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 | Item | Status | Notes |
 |---|---|---|
 | `AGENT_SMOKE=1` launch hook + per-OS smoke job (T-113) | **DONE (W4)** | `agent/src/main.ts` has the hook; `scripts/smoke/launch.mjs` proven locally and the `smoke` job now runs on every OS (`needs: build`) and gates the draft release (`release.needs: [build, smoke]`). Asserts installers exist + sha256, `SMOKE_READY`, `hello.paired=false`, `getState.state=IDLE`, self exit 0 within 20 s. Linux under Xvfb. |
-| Installer-level launch (T-113 follow-up) | OPEN | The smoke job drives the source-built `agent/dist` (launcher resolves Electron from the checkout); it does **not** launch the installed dmg/exe/AppImage out of the package. Extending `launch.mjs` to accept a packaged binary/app dir is the follow-up; until then real installs are the human checklist (§3.4). |
+| Installer-level launch from the artifact (T-113 follow-up) | **DONE (W7)** | The smoke job now extracts the packaged app from the **uploaded artifact** (macOS zip → `.app`; Windows NSIS silent install → installed `.exe`; Linux `AppImage --appimage-extract` → `squashfs-root`) and boots it with `AGENT_SMOKE=1` via `scripts/verify/smoke-packaged.mjs` using the **real** focus driver (packaged builds reject `AGENT_FOCUS_DRIVER=fake` by design) and no focus applied (state must stay `IDLE`). The source-built `agent/dist` smoke is retained as an extra signal. This exercises the real asar layout + flipped fuses (see §11.3). |
 | Auto-update | Not implemented (P2) | No `electron-updater`, no `latest.yml`/blockmap feed. |
 | `rpm` | Not built | Optional; would need `rpm` tools on the Ubuntu runner. |
 | macOS Intel runner | Deprecated eventually | `macos-15-intel` retires fall 2027 (TD §16) — plan universal build or drop x64 via an ADR before then. |
@@ -403,7 +403,59 @@ CI gate: **“Verify packaged app.asar contents (no secrets/certs/sources)”** 
 release build job, lists the archive with `@electron/asar` and fails on a missing required entry or a
 forbidden one.
 
-### 11.3 Verify locally
+### 11.3 Installer-level packaged smoke (from the uploaded artifact)
+
+The release `smoke` job (W7) does not stop at the source-built app: it extracts the **packaged app
+from the uploaded installer artifact** and boots it through the same `AGENT_SMOKE` contract:
+
+| OS | Extraction | Launcher |
+|---|---|---|
+| macOS | `unzip` the produced `.zip` → `Focus Mode Agent.app` | `node scripts/verify/smoke-packaged.mjs "<…>.app"` |
+| Windows | silent NSIS install (`setup.exe /S /D=<temp>`) → installed `.exe` | `node scripts/verify/smoke-packaged.mjs "<installed>.exe"` |
+| Linux | `AppImage --appimage-extract` (no FUSE needed) → `squashfs-root/focus-mode-agent` | `xvfb-run -a node scripts/verify/smoke-packaged.mjs "<binary>"` |
+
+The packaged run uses `AGENT_FOCUS_DRIVER=real` (packaged builds deliberately reject `fake`) and the
+`AGENT_SMOKE` hook never applies focus — the assertion requires `state === 'IDLE'` with no session, then
+a self-exit 0 within 20 s. It therefore proves the installed app boots with the real asar layout and
+the flipped fuses (`OnlyLoadAppFromAsar`/asar-integrity would fail here if broken), while still not
+touching the user's other applications. Logs are uploaded as `smoke-log-<name>` (`packaged-smoke.log`).
+
+### 11.4 Secret scanning (gitleaks, full history)
+
+KI-021 (W7) fixed the last blanket exemption in `.gitleaks.toml`: **no `*.md` / `^docs/` path is
+exempt any more** — a credential pasted into any Markdown file is caught. Path exemptions are limited
+to the two files that intentionally contain example/template values, each listed with its own
+comment:
+
+| Exempt path | Why it is safe |
+|---|---|
+| `(^|/)\.env\.example$` | committed env **templates** only, values are `CHANGE_ME_*` placeholders |
+| `^docs/INTEGRATION_CONTRACTS\.md$` | documentation whose JSON examples deliberately contain fake JWTs / fake HMAC / a fake public key |
+
+The exam-mandated public demo identities (`Admin@123`, `Kabir@123`, `(admin|kabir)@demo.com`) are
+allowlisted **by value** (not by file) because PDF §19 requires them to be public — they are the only
+credential-shaped strings accepted anywhere in the repo. Test fixtures remain covered by their own
+narrow path/regex allowlists (see the file comments).
+
+CI scope (`ci.yml` → **secret scan (gitleaks)**): runs on **every pull request and every push to
+`main`**; checkout uses `fetch-depth: 0` and the pinned gitleaks CLI (v8.30.1, checksum-verified) runs
+`gitleaks git --config .gitleaks.toml --redact --no-banner --verbose`. `gitleaks git` walks the
+commit history reachable from the checked-out ref (`git log -p`), i.e. **full history, not only the
+current tree and not only the PR diff**; a job step prints `git rev-list --count HEAD` so the scanned
+commit count is visible in the log. The job is blocking.
+
+Reproduce locally:
+
+```sh
+gitleaks git --config .gitleaks.toml --redact --verbose   # scans full reachable history
+```
+
+If the scan flags something: **do not allowlist blindly**. Rotate the credential if real; if it is fake
+test/example data, add the narrowest possible exception (a specific path, or a value regex) with a
+comment explaining why it is safe, reviewed by A0 — and re-run the scan. Anything only removable by
+rewriting history is a human+ADR decision, never a silent allowlist.
+
+### 11.5 Verify locally
 
 ```sh
 # 1. package the app (fuses are flipped by afterPack; the hook prints before/after)
@@ -412,8 +464,10 @@ cd agent && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir -
 npx @electron/fuses read --app "release/mac-arm64/Focus Mode Agent.app"
 # 3. manual re-flip / self-verification (idempotent, prints PASS)
 node build/flip-fuses.mjs release/mac-arm64
-# 4. asar listing
+ # 4. asar listing
 npx @electron/asar list "release/mac-arm64/Focus Mode Agent.app/Contents/Resources/app.asar"
+# 5. boot the PACKAGED app through the AGENT_SMOKE contract (real driver, no focus applied)
+node scripts/verify/smoke-packaged.mjs "release/mac-arm64/Focus Mode Agent.app"
 ```
 
 **Unsigned-build caveat:** fuses harden the runtime, they are **not** a substitute for code signing.

@@ -80,17 +80,19 @@ jobs:
         run: npm audit --omit=dev --audit-level=critical
 
   secret-scan:
-    # PR-only: stop secrets before they reach main (T-111 requirement 5; extended in T-115).
+    # Runs on every PR **and every push to main** (W7): a secret that only lands on main must still
+    # be caught, and the push-to-main run is our real-world proof that the full-history scan is
+    # green. Scope = the repo's commit history reachable from the checked-out ref (fetch-depth: 0),
+    # i.e. `gitleaks git` walks `git log -p` over all commits — NOT just the current working tree
+    # and NOT just the PR diff. `.gitleaks.toml` has no blanket `*.md` exemption (KI-021).
     name: secret scan (gitleaks)
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
-      # gitleaks-action lists the PR's commits through the API on pull_request events.
       pull-requests: read
     steps:
-      - name: Checkout (full history for diff scanning)
+      - name: Checkout (full history for gitleaks git)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -109,5 +111,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           install -m 0755 gitleaks "$RUNNER_TEMP/bin/gitleaks"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Scan history for secrets (gitleaks, reviewed allowlist)
+
+      - name: Record scan scope (proves full history, not just the current tree)
+        run: |
+          set -euo pipefail
+          gitleaks version
+          echo "checked-out ref: $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
+          echo "commits reachable from HEAD that gitleaks git scans: $(git rev-list --count HEAD)"
+          echo "working-tree files: $(git ls-files | wc -l) (scan is NOT limited to these)"
+
+      - name: Scan full history for secrets (gitleaks git, reviewed allowlist)
         run: gitleaks git --config .gitleaks.toml --redact --no-banner --verbose

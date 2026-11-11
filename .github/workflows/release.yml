@@ -222,16 +222,18 @@ jobs:
           retention-days: 14
 
   smoke:
-    # T-113: real AGENT_SMOKE run on every OS. This job asserts BOTH:
+    # T-113: real AGENT_SMOKE runs on every OS. This job asserts:
     #   1. the build job really produced the expected installers for this OS — they are downloaded
     #      here and each file's size + sha256 is printed (`focus-agent-<name>` artifact);
-    #   2. the agent starts with AGENT_SMOKE=1, binds 127.0.0.1, answers one `hello`
-    #      (paired=false, IDLE), answers `getState` (IDLE, no session) and exits 0 by itself —
-    #      scripts/smoke/launch.mjs fails with exit 1 on any deviation (its 20 s failsafe exits 1).
-    # HONEST LIMITATION: launch.mjs resolves the Electron executable from the checkout and drives
-    # the app directory built from source (`agent/dist`), so it does NOT prove the *installed*
-    # artifact boots out of the asar/dmg/exe/AppImage. Installer-level launch needs a launcher
-    # extension (tracked as a T-113 follow-up in docs/RELEASING.md §8); this job never claims it.
+    #   2. the source-built agent (`agent/dist`) starts with AGENT_SMOKE=1, binds 127.0.0.1,
+    #      answers `hello` (paired=false, IDLE) + `getState` (IDLE, no session) and exits 0
+    #      (`scripts/smoke/launch.mjs`, 20 s failsafe);
+    #   3. (W7) the *installed artifact* itself boots: the packaged app is extracted from the
+    #      artifact (macOS zip → .app, Windows NSIS silent install, Linux AppImage extract) and
+    #      driven through the same AGENT_SMOKE contract by
+    #      `scripts/verify/smoke-packaged.mjs` with the REAL focus driver (packaged builds reject
+    #      the fake driver by design) and no focus applied. This exercises the asar layout, the
+    #      flipped fuses and app-update metadata for real.
     name: smoke (${{ matrix.name }})
     needs: build
     runs-on: ${{ matrix.os }}
@@ -318,6 +320,47 @@ jobs:
           process.exit(failures === 0 ? 0 : 1);
           NODE
 
+      # Extraction per OS, because the artifact only contains installers:
+      #  * macOS: unzip the produced .zip → "Focus Mode Agent.app";
+      #  * Windows: silent NSIS install (/S) into a temp dir → installed .exe. The portable exe is a
+      #    self-extractor and would hide the real process/stdout from the smoke driver, so the
+      #    installer is used instead;
+      #  * Linux: AppImage `--appimage-extract` (no FUSE needed on the runner) → squashfs-root.
+      - name: Extract packaged app from the installer artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf packaged
+          mkdir -p packaged
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            unzip -q smoke-assets/*.zip -d packaged
+            EXE=$(find packaged -maxdepth 1 -name '*.app' -type d | head -n 1)
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            INSTALL_DIR="$RUNNER_TEMP/focus-agent-smoke-install"
+            rm -rf "$INSTALL_DIR"
+            WIN_DIR=$(cygpath -w "$INSTALL_DIR")
+            echo "running NSIS silent install: setup.exe /S /D=$WIN_DIR"
+            ./smoke-assets/*-win-setup.exe /S "/D=$WIN_DIR"
+            for _ in $(seq 1 30); do
+              EXE=$(find "$INSTALL_DIR" -maxdepth 3 -name '*.exe' \
+                ! -name 'Uninstall*.exe' ! -name 'elevate.exe' | head -n 1 || true)
+              if [ -n "${EXE:-}" ]; then break; fi
+              sleep 1
+            done
+          else
+            chmod +x smoke-assets/*.AppImage
+            ( cd packaged && "$GITHUB_WORKSPACE"/smoke-assets/*.AppImage --appimage-extract >/dev/null )
+            EXE=$(find packaged/squashfs-root -maxdepth 2 -type f -name 'focus-mode-agent' | head -n 1 || true)
+            if [ -n "${EXE:-}" ]; then chmod +x "$EXE"; fi
+          fi
+          if [ -z "${EXE:-}" ]; then
+            echo "FAIL: could not extract a packaged executable from the installer artifact"
+            ls -la packaged 2>/dev/null || true
+            exit 1
+          fi
+          echo "PACKAGED_EXECUTABLE=$EXE" >> "$GITHUB_ENV"
+          echo "packaged executable extracted: $EXE"
+
       # Chromium needs a display on Linux; the headless smoke app is launched under Xvfb.
       - name: Install Xvfb if the runner image lacks it
         if: runner.os == 'Linux'
@@ -342,12 +385,31 @@ jobs:
           set -o pipefail
           node scripts/smoke/launch.mjs 2>&1 | tee smoke.log
 
-      - name: Upload smoke log
+      # Installer-level smoke (W7): boot the app extracted from the REAL uploaded artifact. Uses the
+      # real focus driver because packaged builds reject AGENT_FOCUS_DRIVER=fake by design, and the
+      # AGENT_SMOKE hook never applies focus (state stays IDLE), so this is safe in CI.
+      - name: AGENT_SMOKE packaged app (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a node scripts/verify/smoke-packaged.mjs "$PACKAGED_EXECUTABLE" 2>&1 | tee packaged-smoke.log
+
+      - name: AGENT_SMOKE packaged app (Windows/macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/verify/smoke-packaged.mjs "$PACKAGED_EXECUTABLE" 2>&1 | tee packaged-smoke.log
+
+      - name: Upload smoke logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-log-${{ matrix.name }}
-          path: smoke.log
+          path: |
+            smoke.log
+            packaged-smoke.log
           if-no-files-found: warn
           retention-days: 14
 
