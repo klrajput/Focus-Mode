@@ -1,6 +1,6 @@
 # REQUIREMENT_TRACEABILITY.md — validated PDF-ID → requirement → task coverage
 
-> **Owner:** A1 (Requirements Analyst) · **Task:** T-003 (W0 gate) + W5 status refresh (task-36) · **Status:** validated 2026-11-10; implementation status refreshed at the W4 gate, 2026-11-11 IST (see §18).
+> **Owner:** A1 (Requirements Analyst) · **Task:** T-003 (W0 gate) · **Status:** mapping validated 2026-11-10; **implementation status refreshed at the W6 gate, 2026-11-11 IST** (see §18; W7 is quality-only).
 > **Source of truth:** `PS3_Focus_Mode_Lockdown_Dashboard.pdf` (W3Grads PS03) — **not supplied to this workspace** (blocker **BL-01**). Until it is supplied, the **blueprint is authoritative** per **DEC-003**; this document therefore validates **blueprint-internal consistency only**. Every row tagged `[PDF §n]` is a claim the blueprint makes about the PDF and is **unverifiable against the source** while BL-01 is open (see §16, D-10).
 > **Reference copy:** `project-blueprint/docs/REQUIREMENT_TRACEABILITY.md` is **read-only** input for this analysis. This file is the writable, validated replacement: it mirrors that document's sections, fills the gaps found in it, and proves every claim with the commands in **§17 Validation run**.
 > **Tags** (blueprint convention): `[PDF §n]` = stated in the PDF · `[REC]` = architect recommendation the PDF's design needs but does not state · `[DEC]` = decision where the PDF is ambiguous · `A-nn` = assumption from `DEVELOPMENT_HANDOVER.md` §5 · `BL-nn` = blocker in `docs/AGENT_STATUS.md` §4 · `G-n` = PDF gap resolved in the design.
@@ -33,7 +33,7 @@
 | Pages / routes | 13 | `PROJECT.md` §10 + `FR-021` (11 routes + 404 + 403) | §8, check (e) |
 | Business rules | 8 | blueprint reference §2 `[PDF §13]` | §6 |
 | Edge cases | 7 | blueprint reference §3 `[PDF §13]` | §7 |
-| Implementation status per requirement | 55 | this §18 (W1–W5 refresh) | §18, check (f) |
+| Implementation status per requirement | 55 | this §18 (W1–W6 refresh) | §18, check (f) |
 
 Two source-level caveats that no amount of internal checking removes: **(1)** the PDF itself is absent (BL-01), so "PDF fidelity" is unverified; **(2)** `NFR-015` (every human member appears in git history) and submission item 1 (repo with all members in history) are **human actions** — no AI task can satisfy them (see §16, D-09/D-10).
 
@@ -339,7 +339,7 @@ Zero dangling task IDs were found in the reference doc (80 distinct task IDs cit
 
 ## 17. Validation run
 
-Method: the markdown was parsed programmatically (`node` v26.11.1) — IDs regex-extracted from `PROJECT.md`, `REQUIREMENTS.md`, `IMPLEMENTATION_PLAN.md`, `TECHNICAL_DESIGN.md` and this file — and the five required assertions plus the W5 implementation-status assertion (f) were executed as real checks. The checker scripts live in `/tmp/a1-trace/` (`lib.mjs`, `audit-blueprint.mjs`, `check.mjs`) so the repository does not gain an unowned script; A0 may decide later whether to keep them under `scripts/`. Both commands below were re-run for this W5 refresh (2026-11-11) and the output is pasted verbatim.
+Method: the markdown was parsed programmatically (`node` v26.11.1) — IDs regex-extracted from `PROJECT.md`, `REQUIREMENTS.md`, `IMPLEMENTATION_PLAN.md`, `TECHNICAL_DESIGN.md` and this file — and the five required assertions plus the implementation-status assertion (f) were executed as real checks. The checker scripts live in `/tmp/a1-trace/` (`lib.mjs`, `audit-blueprint.mjs`, `check.mjs`) so the repository does not gain an unowned script; A0 may decide later whether to keep them under `scripts/`. Both commands below were re-run for this W6 refresh (2026-11-11) and the output is pasted verbatim.
 
 **Command 1 — audit of the read-only blueprint reference** (produces the delta list in §16):
 
@@ -369,7 +369,7 @@ OK   collections absent from reference §7                    none
 AUDIT RESULT: 3 gap class(es) in the reference doc — each is fixed in docs/REQUIREMENT_TRACEABILITY.md
 ```
 
-**Command 2 — validation of this document** (assertions (a)–(e) from the original W0 task, plus (f) the W1–W5 status-table refresh):
+**Command 2 — validation of this document** (assertions (a)–(e) from the original W0 task, plus (f) the W1–W6 status-table refresh):
 
 ```console
 $ node /tmp/a1-trace/check.mjs
@@ -427,95 +427,125 @@ What each assertion proves, in the task's terms:
 
 Scope of these proofs, stated honestly: they check **blueprint-internal consistency** and the **mapping completeness** above. They do **not** prove PDF fidelity (BL-01) and they do not prove that a task is *done* — task status lives in `docs/AGENT_STATUS.md`.
 
-## 18. Implementation status (W1–W5 refresh, 2026-11-11)
+## 18. Implementation status (W1–W6 refresh, 2026-11-11)
 
-This section is the *implementation* mirror of the validated mapping above: the task links in §2–§5 do not change, but every requirement now also records **how far it is actually delivered and verified** on the merged product. Status was refreshed after the **W4 gate (PASS)** with **W5 in progress**; do not read "🔄 in progress" rows as working.
+This section is the *implementation* mirror of the validated mapping above: the task links in §2–§5 do not change, but every requirement records **how far it is actually delivered and verified** on the merged product. Status was refreshed after the **W6 gate (PASS)**; **W7 is quality-only** (coverage gaps, client bundle split, flake hardening — no product or contract change), so only W10 bonus work remains genuinely unimplemented.
 
 **Evidence baseline at this refresh (all recorded in `docs/AGENT_STATUS.md`):**
 
-- **Unit/integration: 1015/1015 green** — shared 175 · server 220 · client 125 · agent 495.
-- **Playwright E2E: 16 passed + 1 self-gated skip** on `main` (the skipped missed-run spec re-arms automatically when the W5 notifications API lands). The suite drives the real dashboard, the real API with a seeded in-memory MongoDB, and the real Electron Focus Agent.
-- **Real-OS (macOS, P0):** `npx tsx scripts/verify/macos-focus-smoke.ts` → `PASS darwin/arm64` — real `FocusController` + real `DarwinDriver` hide TextEdit, verify from a separate osascript process, clear the journal, restore and verify (DEC-020).
-- **Release engineering:** workflow-dispatch run `42858934575` produced real **unsigned** installers for all four targets with **4/4 `AGENT_SMOKE` smoke jobs green** and **0 GitHub Releases created** (maintainer-tag-only guard); see §18.3 and `docs/PLATFORMS.md` §6.
-- **CI:** GitHub Actions matrix (Ubuntu 24.04, Windows, macOS) green on lint, typecheck, build and tests.
+- **Unit/integration: 1204/1204 green** — shared 175 · server 345 · client 171 · agent 513.
+- **Playwright E2E: 47 passed / 47, 0 skipped** (≈4.7 min): pairing (no reload), focus flow, sessions, real-scheduler schedule + missed run, admin, insights, notifications, settings, reconnect after a **real SIGKILL**, viewport (NFR-006 ×3), accessibility/axe (NFR-008), perf (NFR-011) and security specs — all against the real dashboard, real API with a seeded in-memory MongoDB, and the real Electron Focus Agent.
+- **Coverage** (TECHNICAL_DESIGN §14 target 80 % lines): shared **100 %**, server **89.44 %**, client **80.70 %**, agent **88.63 %** lines (`docs/QA_NOTES.md` §3/§6).
+- **NFR-011:** worst API p95 **7.22 ms** vs the 300 ms target (loopback measurement; agent idle CPU/RAM remain a Phase-8 OS measurement — see §18.2).
+- **Security:** independent adversarial review, 148 checks, **0 Critical / 0 High**; the 3 Mediums fixed and regression-tested; remaining Low/accepted items documented (`docs/SECURITY_REVIEW.md` §8, DEC-025). Electron **fuses/asar verified on the real CI artifacts**.
+- **Accessibility:** axe-core **0 violations across 11 routes** (W6, A4+F-102…F-113 fixes).
+- **Real-OS (macOS, P0):** `npx tsx scripts/verify/macos-focus-smoke.ts` → `PASS darwin/arm64` (real hide → separate-process verify → journal cleared → idempotent exit → restore; DEC-020).
+- **Packaging:** release dispatch **`42873654284`** = **4/4 build jobs + 4/4 `AGENT_SMOKE` jobs green + fuses/asar gates PASS**, publish job skipped → **0 GitHub Releases** (tag-only guard). Real artifact sizes and sha256 values are in `docs/QA_CHECKLISTS.md` §2 and `RELEASE_NOTES.md`.
+- **CI:** GitHub Actions matrix (Ubuntu 24.04, Windows, macOS) green on lint, format, typecheck, build and tests.
 
-**Status legend** (same scale as the README): ✅ **verified** (automated evidence exists for the acceptance criteria) · 🟡 **partial** (implemented + tested, but a named part is NEEDS-HUMAN) · 🔄 **in progress** (W5, not claimed) · 📋 **planned** (later wave).
+**Status legend:** ✅ **verified** (acceptance criteria have automated or real-OS evidence recorded at a wave gate) · 🟡 **partial** (implemented + tested, but a named part is NEEDS-HUMAN) · 🔄 **in progress** (current wave; not claimed — none of the product requirements are in this state after W6) · 📋 **planned** (W10 bonus only).
 
-| ID | Pri | Status | Evidence (W1–W5) |
+| ID | Pri | Status | Evidence (W1–W6) |
 |---|---|---|---|
-| FR-001 | P0 | ✅ verified | W1: server auth integration tests (401/403/429, bcrypt cost 12, no password hash in responses) + real-API E2E login; CI green on 3 OSes |
-| FR-002 | P0 | 🟡 partial | Electron agent launches/pairs/reports in the real E2E; `AGENT_SMOKE` launcher green locally and in CI. Native tray/menu-bar **visuals** are NEEDS-HUMAN (KI-013, T-101) |
-| FR-003 | P0 | ✅ verified | W2: real pairing E2E (real Electron agent → real code → `POST /devices/pair` → Connected badge via Ed25519 attestation); KI-010 reload gap fixed at the W4 gate |
-| FR-004 | P0 | ✅ verified | W2/W4: link integration tests + real E2E over `ws://127.0.0.1`; badge transitions now assert no page reload (pair + unpair) |
-| FR-005 | P0 | ✅ verified | W3: FakeDriver focus E2E (consent → countdown → aside → end) + real macOS hide verified by `scripts/verify/macos-focus-smoke.ts` |
-| FR-006 | P0 | ✅ verified | W3: journal-first idempotent restore tests + focus E2E; real macOS restore verified from a separate process (same script) |
-| FR-007 | P0 | ✅ verified | W3: countdown derived from the agent's absolute `endsAt` in E2E; timer/auto-end/sleep accounting unit-tested; custom 1–480 validation tested |
-| FR-008 | P0 | ✅ verified | W1 property tests (protected never a candidate) + W3/W4 allow-list API rejecting protected changes (`PROTECTED_ENTRY`, 4 attack shapes) + E2E + locked UI rows |
-| FR-009 | P0 | ✅ verified | W3: `enterFocus` cannot be sent before Confirm (spy test), consent payload/contents tested, global focus indicator on every authenticated route |
-| FR-010 | P0 | ✅ verified | W3/W4: sessions API (filters, pagination, sort, capped actualMinutes) + `api-sessions` / `session-reporting` E2E; dashboard history cards live |
-| FR-011 | P1 | 🟡 partial | macOS real verified (DEC-020). Windows/Linux drivers implemented behind the frozen `FocusDriver` and covered by mocked-native contract suites + CI builds; runtime NEEDS-HUMAN (KI-005, T-100/T-102) |
-| FR-012 | P1 | ✅ verified | W4: real-scheduler E2E (create → minute tick → `scheduleDue` → ≥10 s cancellable heads-up → source SCHEDULE session → run recorded); timezone/DST unit tests |
-| FR-013 | P1 | 🔄 in progress | W5: insights service + `/insights` page are landing in this wave; not yet present in the shared checkout at this refresh |
-| FR-014 | P1 | 🟡 partial | W2: link reconnect/backoff + heartbeat; W3: sleep/resume reconcile and crash recovery tested. Cross-layer hardening T-080 is W6 |
+| FR-001 | P0 | ✅ verified | W1 auth integration tests (401/403/429, bcrypt cost 12, no password hash); W6 adversarial JWT matrix — alg=none, tamper, wrong iss/aud, expired, DB-authoritative role (SECURITY_REVIEW A1-00…A1-27); real-API E2E login; CI green on 3 OSes |
+| FR-002 | P0 | 🟡 partial | Electron agent launches/pairs/reports in the real E2E; `AGENT_SMOKE` green locally + on all 4 CI OS builds; W6 fuses/asar verified on artifacts. Native tray/menu-bar **visuals** are NEEDS-HUMAN (KI-013, QA_CHECKLISTS T-101) |
+| FR-003 | P0 | ✅ verified | W2 real pairing E2E (real Electron agent → real code → `POST /devices/pair` → Connected badge via Ed25519 attestation); KI-010 reload gap fixed at W4 and re-verified |
+| FR-004 | P0 | ✅ verified | Link integration tests + real E2E over `ws://127.0.0.1`; badge transitions assert no page reload (pair + unpair); W6 link-abuse tests (16 KB/3-conn/20 msg-per-s/Origin/Host/subprotocol) |
+| FR-005 | P0 | ✅ verified | W3 FakeDriver focus E2E (consent → countdown → aside → end) + real macOS hide verified by `scripts/verify/macos-focus-smoke.ts`; Windows/Linux runtime needs T-100/T-102 |
+| FR-006 | P0 | ✅ verified | W3 journal-first idempotent restore tests + focus E2E; real macOS restore verified from a separate process; W6 reconnect E2E proves restore after SIGKILL/relaunch |
+| FR-007 | P0 | ✅ verified | Countdown derived from the agent's absolute `endsAt` in E2E; timer/auto-end/sleep accounting unit-tested; custom 1–480 validation tested |
+| FR-008 | P0 | ✅ verified | W1 property tests (protected never a candidate) + allow-list API rejecting protected changes (`PROTECTED_ENTRY`, 4 attack shapes) + E2E + locked UI rows; W6 adversarial INV-3 checks (SECURITY_REVIEW E1-01…E1-05) |
+| FR-009 | P0 | ✅ verified | `enterFocus` cannot be sent before Confirm (spy test), consent payload/contents tested, global focus indicator on every authenticated route; F-101 guard blocks Start while the allow-list is loading/failed (W5 take) |
+| FR-010 | P0 | ✅ verified | Sessions API (filters, pagination, sort, capped actualMinutes) + `api-sessions` / `session-reporting` E2E; dashboard history cards live |
+| FR-011 | P1 | 🟡 partial | macOS real verified (DEC-020). Windows/Linux drivers implemented behind the frozen `FocusDriver`, covered by mocked-native contract suites + real abuse tests + CI builds; runtime NEEDS-HUMAN (KI-005) — checklists T-100/T-102 |
+| FR-012 | P1 | ✅ verified | Real-scheduler E2E (create → minute tick → `scheduleDue` → ≥10 s cancellable heads-up → source SCHEDULE session → run recorded); timezone/DST unit tests; DEC-021 run lifecycle |
+| FR-013 | P1 | ✅ verified | W5: insights service + `/insights` page; hand-computed fixtures (Asia/Kolkata 7d, UTC override, Europe/London DST), E2E insights spec, empty state (W5 gate + W6 gate) |
+| FR-014 | P1 | ✅ verified | W2 reconnect/backoff+heartbeat, W3 sleep/resume + crash reconcile; **W6 T-080**: reconnect E2E with real SIGKILL (lost-contact → relaunch → journal recovery → CRASH_RECOVERY), stale-control/`1008` hardening. Physical sleep/wake remains a Phase-8 item (NEEDS-HUMAN) |
 | FR-015 | P2 | 📋 planned | W10 bonus; requires the optional MV3 extension (assumption A-12) |
 | FR-016 | P2 | 📋 planned | W10 bonus |
 | FR-017 | P2 | 📋 planned | W10 bonus |
 | FR-018 | P2 | 📋 planned | W10 bonus |
-| FR-019 | P0 | 🔄 in progress | W5: admin APIs (`/admin/users`, `/admin/presets`, `/admin/agent-links`, `/admin/stats`) + `/admin` page are landing; the route already enforces the ADMIN role guard |
-| FR-020 | P0 | ✅ verified | W3/W4: allow-list GET/PUT + presets (merge/replace) tests, protected rows preserved, UI editor with `listApps` picker + rollback |
-| FR-021 | P0 | 🟡 partial | W1: all 13 routes render with role guards (USER → 403). Real: dashboard, devices, allow-list, schedules, focus. `/insights`, `/settings`, `/admin`, landing and the notifications bell land in W5 |
-| FR-022 | P0 | 🟡 partial | W3: agent window states (UNPAIRED/PAIRED/FOCUSING/error), countdown, locked allow-list rows, tray End focus/Quit, 67 UI tests. Native visuals NEEDS-HUMAN (KI-013) |
-| FR-023 | P0 | ✅ verified | W3: journal-first ordering test (driver call log), crash recovery on startup, kill-during-write safety; real macOS journal clear verified |
-| FR-024 | P0 | ✅ verified | W3: `ALREADY_FOCUSING` / `focusRejected` tests + sessions API 409 (partial unique index) + E2E |
-| FR-025 | P1 | 🟡 partial | W4: MISSED path implemented and covered by scheduler/reaper unit tests. Notifications REST/UI + missed-run E2E are W5 (the E2E is the 1 self-gated skip) |
-| FR-026 | P0 | ✅ verified | W2: TTL 10 min, single-use, ≤5-attempt latch (5th→400, 6th→410), hash-only storage tests (DEC-014/DEC-017) |
-| FR-027 | P0 | ✅ verified | W4: dashboard-closed reporting E2E — agent reports the end, exactly one finalised session persisted (idempotent `clientSessionId`) |
-| FR-028 | P1 | ✅ verified | W4: reaper tests for stale ACTIVE sessions (heartbeat-bounded actualMinutes) + analytics definitions unit-tested |
-| FR-029 | P0 | 🔄 in progress | W5: `/settings` page + `/users/me` profile/password/unpair-all APIs are landing in this wave |
-| FR-030 | P0 | ✅ verified | W1: idempotent seed tests (run twice → identical counts), refuses production without `--force`; same seed powers E2E |
-| NFR-001 | — | ✅ verified | Shared zod schemas used by client + server; `VALIDATION_ERROR` with `details[]` tests; inline field errors tested |
-| NFR-002 | — | ✅ verified | Central error middleware tests: forced 500 returns generic message, no `stack` in JSON, consistent envelope |
-| NFR-003 | — | ✅ verified | CORS allow-list, helmet, 429 on 11th login, `$ne` injection → 400, cross-user id → 404 tests |
-| NFR-004 | — | ✅ verified | Zod-validated env modules per package + CI gitleaks scan with reviewed allowlist; no hard-coded URLs outside config modules |
+| FR-019 | P0 | ✅ verified | W5 admin APIs + `/admin` page (users search/paginate/deactivate, presets, agent links, **aggregate-only** stats) + E2E USER→403; W6 security fix: deactivation revokes devices, refuses agent reports, skips schedules (F-03, C-25) |
+| FR-020 | P0 | ✅ verified | Allow-list GET/PUT + presets (merge/replace) tests, protected rows preserved, UI editor with `listApps` picker + rollback; C-16/DEC-019 |
+| FR-021 | P0 | ✅ verified | All 13 routes real with role guards + loading/empty/error/success states (W1–W5); E2E covers every page incl. landing, notifications bell, settings, admin; W6 axe 0 violations across 11 routes |
+| FR-022 | P0 | 🟡 partial | Agent window states, countdown, locked allow-list rows, tray End focus/Quit, consent status/revoke (W3 + W6 tests). Native tray/notification **visuals** NEEDS-HUMAN (KI-013) |
+| FR-023 | P0 | ✅ verified | Journal-first ordering test (driver call log), crash recovery on startup, kill-during-write safety; real macOS journal clear; W6 real-SIGKILL reconnect E2E asserts CRASH_RECOVERY finalisation |
+| FR-024 | P0 | ✅ verified | `ALREADY_FOCUSING` / `focusRejected` tests + sessions API 409 (partial unique index) + E2E |
+| FR-025 | P1 | ✅ verified | W4 MISSED path + notification unit tests; W5 notifications REST/UI; **W6 missed-run E2E un-gated and green** (offline at due minute → MISSED + notification, no focus) |
+| FR-026 | P0 | ✅ verified | TTL 10 min, single-use, ≤5-attempt latch (5th→400, 6th→410), hash-only storage tests (DEC-014/DEC-017); W6 adversarial pairing checks (SECURITY_REVIEW §3.2) |
+| FR-027 | P0 | ✅ verified | Dashboard-closed reporting E2E — agent reports the end, exactly one finalised session persisted (idempotent `clientSessionId`); W6 reconnect spec re-covers it |
+| FR-028 | P1 | ✅ verified | Reaper tests for stale ACTIVE sessions (heartbeat-bounded actualMinutes) + analytics definitions unit-tested (ACTIVE never counted) |
+| FR-029 | P0 | ✅ verified | W5 `/settings` + `/users/me` (C-21), password change, `POST /devices/unpair-all` (C-23) revoking every agent, download links; E2E settings spec |
+| FR-030 | P0 | ✅ verified | Idempotent seed tests (run twice → identical counts), refuses production without `--force`; same seed powers E2E |
+| NFR-001 | — | ✅ verified | Shared zod schemas used by client + server; `VALIDATION_ERROR` with `details[]` tests; inline field errors tested; W6 mass-assignment/prototype rejection |
+| NFR-002 | — | ✅ verified | Central error middleware: forced 500 generic, no `stack` in JSON; W6 **F-01** malformed-id 404s and **F-02** deep-JSON 400s fixed + regression-tested |
+| NFR-003 | — | ✅ verified | CORS allow-list, helmet (credentials off), env-driven rate limits (429/400/410 tested incl. XFF spoofing), `$ne`/operator stripping, cross-user → 404; W6 adversarial access-control matrix (SECURITY_REVIEW §3.5–3.6) |
+| NFR-004 | — | ✅ verified | Zod-validated env modules per package + CI gitleaks scan (allowlist); no hard-coded URLs outside config modules |
 | NFR-005 | — | ✅ verified | ESLint 10 + Prettier; lint/format:check green locally and in the 3-OS CI matrix |
-| NFR-006 | — | 🟡 partial | Responsive behaviour measured at the W1 gate with headless Chrome at 360×740 on all 13 routes (no horizontal scroll). The permanent Playwright viewport suite (T-085) is W6 |
-| NFR-007 | — | 🟡 partial | Loading/empty/error/success states exist and are tested per page as pages land; the full per-screen pass completes with the W5 pages then T-093 in W7 |
-| NFR-008 | — | 🟡 partial | Contrast tokens computed (43/43 text pairings PASS @4.5:1 in the UX spec) and semantics shipped; full axe-core pass (T-084) is W6 |
-| NFR-009 | — | ✅ verified | `/api/v1` base, Bearer auth, status codes, list shape `{items,page,limit,total,totalPages}` — contract + integration tests per route |
-| NFR-010 | — | ✅ verified | Link server binds 127.0.0.1 only; foreign Origin/Host rejected at upgrade; unauthenticated message limits tested; LAN unreachable by binding |
-| NFR-011 | — | 🟡 partial | Focus-apply and status-propagation behaviour observed in E2E, but the formal p95/CPU/RAM measurements land in the QA report (T-127, W9) |
-| NFR-012 | — | ✅ verified | Real unsigned installers for 4 targets from CI run `42858934575`, 4/4 `AGENT_SMOKE` jobs green. Installer-level launch is separately NEEDS-HUMAN (T-100/T-101/T-102) |
-| NFR-013 | — | ✅ verified | Least-data payloads + strict schemas (unknown fields rejected) tests; INV-6 no-title assertions in agent driver tests |
-| NFR-014 | — | 🟡 partial | Header comments per module and strict TS in place; `docs/VIVA_NOTES.md` is a W9 deliverable (T-125) |
-| NFR-015 | — | 🟡 partial | Conventional commits/branch-per-feature in use; every **human** member appearing in history is a human action (D-09, AGENTS §6) |
-| NFR-016 | — | ✅ verified | pino logger redaction test (authorization/password/tokens) + request-id handling; agent uses electron-log event-only logging |
-| NFR-017 | — | 🟡 partial | Deploy configs and README setup verified locally; live deployment (T-120/T-121) is W9 and needs hosting credentials |
-| REC-001 | P0 | ✅ verified | Cloud `/agent-link` hub: device-token auth, heartbeat 15 s, 45 s disconnect, INV-2 (cloud→agent only `scheduleDue`/`revoked`) enforced by tests |
-| REC-002 | P0 | ✅ verified | Two-stage pairing digest implemented per DEC-014; register/pair/poll + token-once tests and real pairing E2E |
-| REC-003 | P0 | ✅ verified | EdDSA attestation (node:crypto, DEC-016): wrong nonce/expiry/user rejected; unauth `enterFocus` → `focusRejected{UNAUTHENTICATED}` |
-| REC-004 | P0 | 🟡 partial | Native first-run consent gate tested (cannot be answered by the page; stored + revocable). Dialog/tray **visuals** NEEDS-HUMAN and E2E uses a test seam (KI-011) |
+| NFR-006 | — | ✅ verified | **W6:** `e2e/viewport.spec.ts` — no horizontal scroll at 360×740, 768×1024, 1440×900 (Playwright) |
+| NFR-007 | — | ✅ verified | Loading/empty/error/success states implemented and tested on every data-driven page (W1–W5 pages + E2E per page); retry/error boundaries in pages |
+| NFR-008 | — | ✅ verified | **W6:** axe-core **0 violations across 11 routes** + F-102…F-113 a11y fixes; contrast tokens 43/43 PASS (UX_SPEC) |
+| NFR-009 | — | ✅ verified | `/api/v1` base, Bearer auth, status codes, list shape `{items,page,limit,total,totalPages}` — contract + integration tests per route; C-21…C-25 |
+| NFR-010 | — | ✅ verified | Link server binds 127.0.0.1 only; foreign Origin/Host rejected at upgrade; unauthenticated message limits + abuse tests; LAN unreachable by binding |
+| NFR-011 | — | ✅ verified | **W6:** `e2e/perf.spec.ts` — worst p95 **7.22 ms** vs 300 ms target (loopback, 200 req/endpoint, asserted in the spec). Agent idle CPU/RAM (<2 %, <200 MB) is an OS-level Phase-8 measurement — see §18.2 |
+| NFR-012 | — | ✅ verified | Real unsigned installers for 4 targets from CI run **42873654284**, 4/4 build + 4/4 `AGENT_SMOKE` green, fuses/asar gates PASS. Installer-level launch/signing remain NEEDS-HUMAN (T-100/T-101/T-102) |
+| NFR-013 | — | ✅ verified | Least-data payloads + strict schemas (unknown fields rejected); INV-6 source/tests (no title/URL APIs) + human log spot-check in QA_CHECKLISTS |
+| NFR-014 | — | ✅ verified | Strict TS + per-module header comments across packages; **`docs/VIVA_NOTES.md` exists (W6)** with per-module viva notes and ADR citations |
+| NFR-015 | — | 🟡 partial | Conventional commits / branch-per-feature; every **human** member appearing in history is a human action (D-09, AGENTS §6) |
+| NFR-016 | — | ✅ verified | pino redaction test (authorization/password/tokens) + request ids; agent electron-log event-only, secret-free logs (W6 agent abuse tests) |
+| NFR-017 | — | 🟡 partial | Deploy config sketch + local setup verified; live deployment (T-120/T-121) is W9 and needs hosting credentials (`docs/DEPLOYMENT.md`, BL-07) |
+| REC-001 | P0 | ✅ verified | Cloud `/agent-link` hub: device-token auth, 15 s heartbeat, 45 s disconnect, INV-2 enforced by shared tests + hub tests; agent reporting idempotent |
+| REC-002 | P0 | ✅ verified | Two-stage pairing digest per DEC-014; register/pair/poll + token-once tests, real pairing E2E; W6 F-04/F-06 follow-ups (enroll-poll oracle Low, limiter added) documented |
+| REC-003 | P0 | ✅ verified | EdDSA attestation (node:crypto, DEC-016): wrong nonce/expiry/user rejected; unauth `enterFocus` → `focusRejected{UNAUTHENTICATED}`; W6 **C-26** server-side single-use nonce replay cache (defence-in-depth) |
+| REC-004 | P0 | 🟡 partial | Native first-run consent gate tested (cannot be answered by the page; stored/versioned/revocable); dialog visuals NEEDS-HUMAN + E2E uses a test seam (KI-011) |
 | REC-005 | P1 | ✅ verified | Enforcement loop tested with the FakeDriver call log: re-asides new windows, never protected, stops on exit, disabled → zero extra calls |
-| REC-006 | P0 | ✅ verified | `clientSessionId` idempotency tests + E2E: duplicate reports merge, no double count, dashboard-closed path covered |
+| REC-006 | P0 | ✅ verified | `clientSessionId` idempotency tests + E2E: duplicate reports merge, no double count; dashboard-closed and reconnect paths covered |
 | REC-007 | P1 | ✅ verified | `listApps`/`apps` local messages implemented (key+label+running only) and consumed by the allow-list picker |
-| REC-008 | P0 | 🟡 partial | Default-off behaviour unit-tested (tray menu + view-model); the literal tray toggle interaction is NEEDS-HUMAN (KI-013, T-101) |
+| REC-008 | P0 | 🟡 partial | Default-off behaviour unit-tested (tray menu + view-model); the literal tray toggle interaction is NEEDS-HUMAN (KI-013) |
 
-### 18.1 W5 in progress — not claimed
+### 18.1 W6 hardening evidence — SEC-1…SEC-10, C-21…C-26, DEC-025
 
-`FR-013` (insights), `FR-019` (admin), `FR-029` (settings/profile), the remaining `FR-021` pages (`/insights`, `/settings`, `/admin`, landing, notifications bell) and `FR-025`'s REST/UI surface are being built in W5. At this refresh the corresponding `/api/v1/insights|notifications|users|admin` routes and the W5 pages were **not present in the shared checkout** (checked on disk), which is exactly why they are marked 🔄 rather than verified.
+| Item | W6 evidence | Status |
+|---|---|---|
+| SEC-1 bcrypt ≥12 | stored `$2b$12$…`; `BCRYPT_COST = 12` (SECURITY_REVIEW S1-01) | ✅ PASS |
+| SEC-2 HS256 / 30 min / ≥32-byte secret | real login token `alg=HS256 ttl=1800`; env enforces ≥32 chars; alg pinned (A1 matrix) | ✅ PASS |
+| SEC-3 helmet + strict CORS | helmet headers + CORS reflects only `CLIENT_URL`, `credentials:false` (SECURITY_REVIEW F1/F2) | ✅ PASS |
+| SEC-4 rate limits | auth 30→429, pairing 400×5→410→429, agent register 5/min→429, XFF spoof does not reset (F3-01…F3-04) | ✅ PASS |
+| SEC-5 pairing digest/TTL/single-use | DEC-014 digest + DEC-017 per-user latch; B1-01…B1-03, S6-01 | ✅ PASS (residual per-user latch documented) |
+| SEC-6 device token 256-bit, hashed at rest, revocable | only `deviceTokenHash` stored; revoke deletes credentials (S6-01, B2-03/04) | ✅ PASS |
+| SEC-7 EdDSA 60 s nonce-bound | B3-01, B4-01…B4-06, B5-01…B5-06; **C-26** single-use server-side nonce cache added (DEC-025) | ✅ PASS |
+| SEC-8 Electron hardening + fuses | `contextIsolation`/`sandbox`/CSP/hardening tests; **fuses/asar verified on real CI artifacts** (`verify-fuses.mjs`, run `42873654284`); packaged-runtime launch is NEEDS-HUMAN | ✅ PASS (source + artifacts) |
+| SEC-9 operator/prototype stripping | `email.$ne` rejected with path; prototype-pollution/mass-assignment checks (D1-01…D1-06) | ✅ PASS |
+| SEC-10 least-data payloads | no `passwordHash`, aggregate-only stats, whitelist mappers (D2-10/D2-11) | ✅ PASS |
+| C-21 `GET /users/me` | implemented + contract-tested (46-operation table) | ✅ folded |
+| C-22 `GET /notifications` `unreadCount` + idempotent read | implemented + tests/E2E | ✅ folded |
+| C-23 `POST /devices/unpair-all` | pushes `revoked` then deletes devices; E2E settings | ✅ folded |
+| C-24 `GET /insights` optional `weekly` (30d/90d) | implemented + fixture tests | ✅ folded |
+| C-25 admin filters / self-protection 409 / https agent-links / `/health/db` | implemented + tests; `GET /health/db` readiness 503 with `INTERNAL` | ✅ folded |
+| C-26 attestation nonce replay cache | added as defence-in-depth (DEC-025, SECURITY_REVIEW §8); recorded in `docs/AGENT_STATUS.md` | ✅ implemented (A2 fold-in into INTEGRATION_CONTRACTS §12 pending — reported as a doc delta) |
+| DEC-025 (security posture, measurable targets, test-only rate-limit knob) | security 0 Critical/High · NFR-011 p95 7.22 ms · coverage ≥80 % · NFR-006/008 automated · `RATE_LIMIT_AGENT_REGISTER_MAX` test-only (prod default 5/min unchanged) | ✅ accepted |
 
 ### 18.2 NEEDS-HUMAN register (what no worker can verify here)
 
 | Item | Why | Checklist / evidence required |
 |---|---|---|
-| Windows 10/11 real window control (FR-011, NFR-012) | No Windows desktop in this session (KI-005) | T-100 W1–W8 in `docs/PLATFORMS.md` §3/§7 |
-| Linux X11 real window control (FR-011) | No Linux desktop in this session (KI-005) | T-102 L1–L3 in `docs/PLATFORMS.md` §4/§7 |
-| macOS Phase-8 extras (FR-002, FR-022, REC-004, REC-008) | Native tray menus/notifications cannot be driven by Playwright (KI-013, KI-011) | T-101 M1–M7 in `docs/PLATFORMS.md` §2/§7 |
-| Installer-level launch per OS (NFR-012) | CI proves packaged code boots headless, not that the installed dmg/exe/AppImage launches | T-100 W7, T-101 M6, T-102 L3 |
-| Every human in git history (NFR-015) | Only humans can author/merge their own commits (D-09, AGENTS §6) | `git shortlog -sn` at the release gate + hand-off lists |
-| Signing / notarisation | No certificates in this environment | `docs/RELEASING.md` §5–§6 (unsigned path is what CI exercises) |
+| Windows 10/11 real window control (FR-005/FR-006/FR-011) | No Windows desktop in this session (KI-005) | `docs/QA_CHECKLISTS.md` §3 (T-100 W-01…W-18) |
+| Linux X11 real window control (FR-005/FR-006/FR-011) | No Linux desktop in this session (KI-005) | `docs/QA_CHECKLISTS.md` §5 (T-102 L-01…L-14) |
+| macOS Phase-8 extras (FR-002/FR-022/REC-004/REC-008) | Native tray menus/notifications cannot be driven by Playwright (KI-011/KI-013) | `docs/QA_CHECKLISTS.md` §4 (T-101 M-01…M-18) |
+| Agent idle CPU / RAM (NFR-011 remainder) | OS-level measurement | Phase-8 observation on each OS; record in `docs/QA_REPORT.md` |
+| Installer-level launch per OS (NFR-012) | CI proves packaged code boots headless, not that the installed dmg/exe/AppImage launches | QA_CHECKLISTS W-01/M-01/L-01, W-17/M-17/L-14 |
+| Signing / notarisation + tag publishing | No certificates; tags are maintainer-pushed | `docs/RELEASING.md` §5–§6 |
+| Every human in git history (NFR-015) | Only humans author/merge their own commits (D-09) | `git shortlog -sn` at the release gate + hand-off lists |
 
-### 18.3 Scope of this status table
+### 18.3 Remaining scope after W6 (honest)
 
-- The status column reflects **evidence recorded at wave gates** (`docs/AGENT_STATUS.md`) and the W5 in-progress check on disk — not intentions, and not the task checkboxes in `IMPLEMENTATION_PLAN.md`.
+- **W7 (in progress):** quality only — coverage gaps (e.g. `server/src/utils/jwt-eddsa.ts` unit tests, `client` pages at 0 %), route-level client bundle split (~1 MB single chunk noted in `docs/QA_NOTES.md` §2), flake hardening, full-history secret scan. No requirement status in this table should change except raising coverage.
+- **W8:** the Phase-8 human checklists (`docs/QA_CHECKLISTS.md`) must be executed on real desktops; only then can FR-011 / AGENT-1 / REC-004 / REC-008 move from 🟡 to ✅.
+- **W9:** signing/tag/release (`docs/RELEASING.md`, `RELEASE_NOTES.md`), live deployment (T-120/T-121, `docs/DEPLOYMENT.md`), `docs/QA_REPORT.md`, final `PROMPTS.md`/`VIVA_NOTES` pass, demo recording (`docs/DEMO_SCRIPT.md`).
+- **W10:** only then the P2 bonus items (FR-015…FR-018) — they are not part of the 0.1.0 release.
+
+### 18.4 Scope of this status table
+
+- The status column reflects **evidence recorded at wave gates** (`docs/AGENT_STATUS.md`, `docs/QA_NOTES.md`, `docs/SECURITY_REVIEW.md`) — not intentions, and not the task checkboxes in `IMPLEMENTATION_PLAN.md`.
 - ✅ means the requirement's acceptance criteria have automated or real-OS evidence in this repo/CI; it does **not** mean the PDF itself was available to diff against (BL-01/DEC-003, §16 D-10).
-- This table is refreshed at each gate (next: W5 close), and the same statuses feed the `README.md` feature table.
+- This table is refreshed at each gate (last: W6). The same statuses feed the `README.md` feature table; W7/W8/W9 will only flip the NEEDS-HUMAN rows once the human evidence exists.
