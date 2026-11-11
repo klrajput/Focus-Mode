@@ -10,7 +10,8 @@ import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 
 import type { Insights } from '../api/types';
-import { createTestQueryClient } from '../test/test-utils';
+import { AuthContext } from '../auth/auth-context';
+import { createTestQueryClient, makeAuthValue, makeUser } from '../test/test-utils';
 import { InsightsPage } from './insights';
 
 function fakeResponse(body: unknown, status = 200): Response {
@@ -67,16 +68,24 @@ function success(data: unknown): unknown {
   return { success: true, data };
 }
 
+const AUTH = makeAuthValue({
+  status: 'authenticated',
+  user: makeUser({ id: '507f1f77bcf86cd799439012' }),
+});
+
 function renderInsights() {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
-      <InsightsPage />
+      <AuthContext.Provider value={AUTH}>
+        <InsightsPage />
+      </AuthContext.Provider>
     </QueryClientProvider>,
   );
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.localStorage.clear();
 });
 
 describe('InsightsPage', () => {
@@ -89,6 +98,15 @@ describe('InsightsPage', () => {
     expect(screen.getByText('4 days')).toBeInTheDocument();
     expect(screen.getByText('Longest 7 days')).toBeInTheDocument();
     expect(screen.getAllByText('09:00–10:00').length).toBeGreaterThanOrEqual(1);
+
+    // Achievements + device-local weekly goal are part of the success state.
+    expect(screen.getByRole('heading', { name: 'Achievements', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Weekly goal', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Weekly goal' })).toHaveAttribute(
+      'aria-valuenow',
+      '300',
+    );
+    expect(screen.getByText('Goal is stored on this device only.')).toBeInTheDocument();
 
     expect(
       screen.getByRole('heading', { name: 'Daily focus minutes', level: 2 }),
@@ -136,6 +154,8 @@ describe('InsightsPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'Weekly focus minutes', level: 2 }),
     ).toBeInTheDocument();
+    // The goal card reads the same payload: the latest weekly bucket is 45 minutes.
+    expect(await screen.findByText('45 of 300 min')).toBeInTheDocument();
   });
 
   it('shows the empty state with "—" metrics and no chart', async () => {
@@ -170,6 +190,15 @@ describe('InsightsPage', () => {
     expect(
       screen.queryByRole('heading', { name: 'Daily focus minutes', level: 2 }),
     ).not.toBeInTheDocument();
+
+    // Empty data must never fabricate badges or goal progress.
+    expect(screen.queryByText('Earned')).not.toBeInTheDocument();
+    expect(screen.getByText(/0 of 8/)).toBeInTheDocument();
+    expect(screen.getByText(/No focus data in this range yet/)).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Weekly goal' })).toHaveAttribute(
+      'aria-valuetext',
+      '0 of 300 minutes this week',
+    );
   });
 
   it('shows the error state with the code as a muted reference and retries', async () => {

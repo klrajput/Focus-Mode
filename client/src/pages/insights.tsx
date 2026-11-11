@@ -1,18 +1,25 @@
 /*
- * `/insights` (UX_SPEC §4.8, FR-013).
+ * `/insights` (UX_SPEC §4.8, FR-013; W10 T-133 badges/goal per DEC-027).
  *
  * Real `GET /insights?range=7d|30d|90d` data: focused time (`actualMinutes`), sessions, completion
  * rate, current + longest streak, best focus hours, and a Recharts daily/weekly bar chart with both
  * a plain-language summary and a disclosure table so the numbers never depend on the SVG. Empty
  * ranges show "—" metrics and §6.1's encouraging sentence; the chart is hidden rather than faked.
  * `aria-busy` marks the region during a range refresh.
+ *
+ * W10 adds two sections that still read only this payload: achievement badges (all locked when the
+ * payload is empty) and a weekly goal whose target is a per-user `localStorage` preference — never
+ * server data, never estimated progress. Leaderboards are out of scope (DEC-027).
  */
 
 import { useState } from 'react';
 import { ChartColumn } from 'lucide-react';
 import type { InsightsRange } from '@focus-mode/shared';
 
+import { useAuth } from '../auth/auth-context';
+import { Achievements } from '../components/insights/achievements';
 import { FocusChart, buildChartSeries } from '../components/insights/focus-chart';
+import { WeeklyGoalCard } from '../components/insights/weekly-goal';
 import { Card, CardBody, CardHeader } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { ErrorState } from '../components/ui/error-state';
@@ -44,6 +51,7 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
 
 export function InsightsPage() {
   const [range, setRange] = useState<InsightsRange>('7d');
+  const { user } = useAuth();
   const insightsQuery = useInsights(range);
   const insights = insightsQuery.data;
   const isEmpty = insightsQuery.isSuccess && (insights?.totals.sessions ?? 0) === 0;
@@ -155,7 +163,18 @@ export function InsightsPage() {
                 title="No focus data for this range yet. Finish a session to see your progress."
                 footnote="Metrics stay empty until a session finishes; nothing is estimated or back-filled."
               />
-            ) : (
+            ) : null}
+
+            {/* Device-local target and achievements are still shown when empty: all badges stay
+                locked and the goal reads 0 m instead of disappearing or guessing history. */}
+            <WeeklyGoalCard
+              daily={insights.daily}
+              range={insights.range}
+              userId={user?.id ?? null}
+            />
+            <Achievements insights={insights} />
+
+            {isEmpty ? null : (
               <>
                 <Card ariaLabelledBy="chart-heading">
                   <CardHeader

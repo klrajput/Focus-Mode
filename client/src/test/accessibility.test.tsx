@@ -358,6 +358,9 @@ describe('NFR-008 axe checks', () => {
     renderInShell('/insights', <InsightsPage />);
     await screen.findByRole('heading', { level: 1, name: 'Insights' });
     await screen.findByText('Daily focus minutes');
+    // W10 badges + goal are in the tree before axe walks it (listitem labels + progressbar).
+    await screen.findByRole('heading', { level: 2, name: 'Achievements' });
+    await screen.findByRole('progressbar', { name: 'Weekly goal' });
     await expectNoSeriousViolations();
   });
 
