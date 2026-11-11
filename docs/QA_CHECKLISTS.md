@@ -3,7 +3,7 @@
 > **Owner:** A1 (checklists) · executed by any team member with access to the real OS · evidence compiled by A9 into `docs/QA_REPORT.md` · **W8 deliverable.**
 > **Status:** every item below is **NEEDS-HUMAN** — Playwright can prove the controller, the protocol and the packaged-code boot, but it cannot prove that windows on a physical desktop really move and restore (KI-005), that native tray menus/notifications work (KI-013), or that an installed unsigned app launches (installer-level launch).
 > **Rule: nothing may be ticked without evidence** (OS version, build id, screenshot/log, installer sha256). A FAIL is recorded, not explained away; it becomes a `docs/KNOWN_ISSUES.md` entry. If C5 or C6 fails, **stop** — that is a Critical/High class failure (focus stuck / irreversible).
-> **Sibling docs:** [`PLATFORMS.md`](PLATFORMS.md) (per-OS behaviour + status matrix), [`RELEASING.md`](RELEASING.md) (build/sign/install), [`QA_NOTES.md`](QA_NOTES.md) (automated measurements), [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md), [`DEPLOYMENT.md`](DEPLOYMENT.md).
+> **Sibling docs:** [`PLATFORMS.md`](PLATFORMS.md) (per-OS behaviour + status matrix), [`RELEASING.md`](RELEASING.md) (build/sign/install), [`RELEASE_HANDOFF.md`](RELEASE_HANDOFF.md) (maintainer's final release checklist, T-122 download links), [`QA_NOTES.md`](QA_NOTES.md) (automated measurements), [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md), [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## 0. What is already proven automatically — do not redo it manually
 

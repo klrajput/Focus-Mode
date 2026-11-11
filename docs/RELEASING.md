@@ -2,8 +2,9 @@
 
 Owner: **A10 (Release & CI)** · Plan items: **T-110** (`agent/electron-builder.yml` + `agent/build/`),
 **T-112** (`.github/workflows/release.yml`), **T-113** (per-OS AGENT_SMOKE job + first real installers),
-**T-114** (signing/notarisation runbook), **T-115** (Dependabot + audit gating).
-Last updated: 2026-11-10 (W4).
+**T-114** (signing/notarisation runbook, §5), **T-115** (Dependabot + audit gating), **T-122**
+(post-release admin download links, §12).
+Last updated: 2026-11-11 (W8/W9). **One-page maintainer release checklist: [`RELEASE_HANDOFF.md`](RELEASE_HANDOFF.md).**
 
 > **Hard rule:** tags are pushed **only by the human maintainer**. AI workers never run `git`
 > (no branch, tag, commit or push commands) — they prepare the files and hand them to A0.
@@ -26,6 +27,7 @@ Two files define the whole pipeline (plus the smoke launcher and dependency-upda
 | `.github/workflows/release.yml` | Runs one native runner per OS, builds installers with `--publish never`, uploads workflow artifacts, runs the per-OS `AGENT_SMOKE` job, and creates a **draft** GitHub Release on tag pushes only. |
 | `scripts/smoke/launch.mjs` | Launches the built agent with `AGENT_SMOKE=1`, drives the real loopback link (`hello` + `getState`) and exits 0 only when every assertion passed. Used locally and by the release smoke job. |
 | `.github/dependabot.yml` | Weekly grouped npm + GitHub Actions PRs (no auto-merge) — §9. |
+| `docs/RELEASE_HANDOFF.md` | **One-page maintainer checklist** for the final release: preconditions, tag command, draft inspection, T-122 download links, post-release verification, human-gated list. |
 
 `electron-updater` is **not** installed and no update feed is consumed (auto-update is P2). The
 GitHub `publish` block in `electron-builder.yml` exists only to declare the provider and
@@ -98,16 +100,15 @@ artifacts (and breaking the draft release with duplicate asset names).
    upload installers as workflow artifacts (`focus-agent-<name>`).
 2. `smoke` — 4 jobs in parallel (T-113), one per build job (`needs: build`). Each job
    (a) downloads that OS's installer artifact, asserts every expected extension is present, size
-   > 1 MB, and prints its sha256; (b) runs `node scripts/smoke/launch.mjs`, which starts the agent
-   with `AGENT_SMOKE=1`, waits for its single `SMOKE_READY port=<n>` line, connects a real `ws`
-   client, asserts `hello.paired=false` + `hello.state=IDLE`, sends `getState`, asserts
-   `state=IDLE` with no session, and requires the agent to exit 0 on its own (its 20 s failsafe
-   exits 1; the launcher fails on any deviation). Linux runs it under `xvfb-run`. Each job uploads
-   `smoke-log-<name>`. **HONEST LIMITATION:** launch.mjs resolves Electron from the checkout and
-   drives the source-built `agent/dist`, so the smoke proves the packaged code + Electron boot
-   headless — *not* that the installed dmg/exe/AppImage itself boots. Installer-level launch is the
-   T-113 follow-up in §8, and the draft release stays draft until a human runs the real install
-   checklist (§3.4).
+   > 1 MB, and prints its sha256; (b) runs `node scripts/smoke/launch.mjs` on the source-built
+   `agent/dist` (real `ws` client, asserts `hello.paired=false` / `state=IDLE` / no session / self
+   exit 0 within 20 s); (c) **[W7] boots the packaged app from the artifact** with
+   `node scripts/verify/smoke-packaged.mjs` — macOS `.app` from the zip, Linux
+   `AppImage --appimage-extract` → `squashfs-root`, Windows the uploaded `windows-x64-unpacked`
+   payload (the exact files the NSIS installer installs; the installer UI is not run in CI) — with
+   the **real** focus driver (packaged builds reject `fake`) and no focus applied. Linux runs under
+   `xvfb-run`. Each job uploads `smoke-log-<name>` (`smoke.log` + `packaged-smoke.log`). The draft
+   release still stays draft until a human runs the real install checklist (§3.4 / RELEASE_HANDOFF §7).
 3. `release` — tag pushes only and `needs: [build, smoke]`: downloads only the `focus-agent-*`
    installer artifacts (smoke logs excluded), generates `SHA256SUMS.txt`, creates a **draft**
    GitHub Release with `gh release create --draft`. `workflow_dispatch` runs skip this job
@@ -131,14 +132,16 @@ build jobs and all four smoke jobs run; **the release job is skipped** because
 mandatory pre-flight check before tagging (§3.1) and produces the canonical first real installers
 for manual install verification (§6).
 
-### 3.4 Publish
+### 3.4 Publish (NEEDS-HUMAN — full checklist in [`RELEASE_HANDOFF.md`](RELEASE_HANDOFF.md) §5–§7)
 
 1. Open the draft release, check assets + `SHA256SUMS.txt` against the local downloads.
 2. Run the manual launch checklist (install, pair window opens, quit works) on real hardware.
-3. Edit notes if needed, then **Publish release**.
-4. Never move/re-push a published tag: ship a new patch version instead.
-5. `docs/AGENT_STATUS.md` / wave gate: record the release URL, artifact hashes and OS verification
-   status (`NEEDS-HUMAN` until T-102 evidence exists).
+3. Edit notes if needed, then **Publish release** (`gh release edit <tag> --draft=false`).
+4. **T-122:** publish the admin download links with the real release URLs (§12) and verify the
+   landing page + `/settings` render them.
+5. Never move/re-push a published tag: ship a new patch version instead.
+6. `docs/AGENT_STATUS.md` / wave gate: record the release URL, artifact hashes and OS verification
+   status (`NEEDS-HUMAN` until T-101/T-102 evidence exists).
 
 ---
 
@@ -176,43 +179,122 @@ Notes for this shared sandbox machine:
 
 ---
 
-## 5. Signing & notarisation (optional)
+## 5. Signing & notarisation runbook (T-114)
 
 Signing is entirely **secret-gated**: with no secrets the workflow passes and produces unsigned
-artifacts. The same two variables work on Windows and macOS:
+artifacts (the CI-proven path). With the secrets below it signs and (macOS) notarises. This whole
+section is **[NEEDS-HUMAN]** — the certificates belong to the maintainer, never to the repo.
+
+### 5.1 Secrets (Repo → Settings → Secrets and variables → Actions)
 
 | Variable | Platform | Meaning |
 |---|---|---|
 | `CSC_LINK` | Windows + macOS | Base64 of the certificate file (`.pfx` for Windows, `.p12` for macOS), or a URL/path electron-builder accepts. |
 | `CSC_KEY_PASSWORD` | Windows + macOS | Password of that certificate. |
 | `APPLE_ID` | macOS only | Apple ID used by `@electron/notarize`. |
-| `APPLE_APP_SPECIFIC_PASSWORD` | macOS only | App-specific password for that Apple ID. |
-| `APPLE_TEAM_ID` | macOS only | Apple Developer team id. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | macOS only | App-specific password for that Apple ID (appleid.apple.com → Sign-In and Security → App-Specific Passwords). |
+| `APPLE_TEAM_ID` | macOS only | Apple Developer team id (Apple Developer portal → Membership). |
 
-Add them under **Repo → Settings → Secrets and variables → Actions**. Never commit
-certificates/keys; `.gitignore` covers `.env*`, and the PR gitleaks job catches accidental secrets.
-The workflow passes them only as step env vars, so they do not leak into logs or artifacts.
+Never commit certificates/keys or `.p12/.pfx` files: `.gitignore` covers `.env*`, the PR gitleaks job
+scans full history, and the CI gate exports secrets only into the step env (they are never echoed into
+artifacts). Rotate/revoke immediately if a certificate leaks.
 
-- **Windows**: an OV/EV code-signing certificate is required to avoid SmartScreen "unknown publisher".
-  Without it the NSIS/portable exes are unsigned (§6.1).
-- **macOS**: signing needs a *Developer ID Application* certificate, notarisation additionally needs
-  the three `APPLE_*` values. electron-builder runs `@electron/notarize` automatically when those are
-  present (no `mac.notarize: false` override in the config). Set `CSC_*` and `APPLE_*` **together** or
-  neither: with `APPLE_*` set but no signing identity, notarisation fails because the app is unsigned.
-  Hardened runtime and the entitlements in `agent/build/entitlements.mac.plist` are applied **only
-  when a signing identity exists** — an unsigned build skips codesign entirely.
-- Verify a signed/notarised mac build:
+Generate the base64 values locally (macOS example):
 
-  ```sh
-  codesign --verify --deep --strict --verbose=2 "Focus Mode Agent.app"
-  spctl --assess --type execute --verbose "Focus Mode Agent.app"
-  xcrun stapler validate "focus-mode-agent-<ver>-mac-arm64.dmg"
-  ```
+```sh
+# Developer ID Application certificate exported from Keychain Access as .p12
+base64 -i developer-id-application.p12 | pbcopy     # paste into the CSC_LINK secret
+# Windows: base64 -i codesign.pfx | pbcopy; pick the .pfx password as CSC_KEY_PASSWORD
+```
+
+### 5.2 macOS — Developer ID signing + notarisation
+
+1. Apple Developer Program membership (paid) with a **Developer ID Application** certificate.
+2. Set `CSC_LINK` (base64 `.p12`) + `CSC_KEY_PASSWORD`; set `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`
+   + `APPLE_TEAM_ID` for notarisation. Set `CSC_*` and `APPLE_*` **together** (or neither): with
+   `APPLE_*` but no identity, notarisation fails because the app is unsigned.
+3. In CI the *Configure optional signing environment* step exports the env only when present. Then
+   electron-builder: signs the app with hardened runtime + `agent/build/entitlements.mac.plist`
+   (§11), runs `@electron/notarize` (notarytool under the hood) automatically because no
+   `mac.notarize: false` override exists, and produces dmg/zip. The fuses were flipped **before**
+   signing by the `afterPack` hook (§11.1).
+4. Manual fallback / diagnostics if CI notarisation fails:
+
+   ```sh
+   xcrun notarytool submit "focus-mode-agent-<ver>-mac-arm64.dmg" \
+     --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
+   xcrun notarytool log <submission-id>                  # what failed, if it did
+   xcrun stapler staple "focus-mode-agent-<ver>-mac-arm64.dmg"   # staple the DMG for offline Gatekeeper
+   ```
+
+   The `.zip` cannot be stapled — distribute the DMG to end users; the zip is for CI/auto-update style
+   downloads only (no updater ships, P2).
+
+### 5.3 Windows — Authenticode
+
+1. OV/EV code-signing certificate (`.pfx` + password) from a CA; EV certificates may require a
+   hardware/HSM token in which case signing runs on a Windows machine with the token, not in CI.
+2. Set `CSC_LINK` (base64 `.pfx`) + `CSC_KEY_PASSWORD`. electron-builder signs with **signtool**,
+   SHA-256 digest, and the default **RFC 3161 timestamp** server
+   (`win.signtoolOptions.rfc3161TimeStampServer`, default `http://timestamp.digicert.com`) — a
+   timestamp keeps the signature valid after the certificate expires. Only change the server via a
+   reviewed `agent/electron-builder.yml` change.
+3. Without a certificate the NSIS/portable exes are unsigned → SmartScreen "unknown publisher"
+   (user steps §6.1) — documented, not hidden.
+4. Manual fallback:
+
+   ```sh
+   signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 \
+     /f codesign.pfx /p "$CSC_KEY_PASSWORD" "Focus Mode Agent.exe"
+   signtool verify /pa /v "Focus Mode Agent.exe"
+   ```
+
+### 5.4 How the CI signing gate behaves when secrets are absent (already proven)
+
+The workflow's *Configure optional signing environment* step prints either
+`code signing: enabled (certificate supplied via repository secrets)` or
+`code signing: disabled (no CSC_LINK secret) — building UNSIGNED, as documented`, and only exports
+`CSC_LINK`/`CSC_KEY_PASSWORD`/`APPLE_*` when non-empty. With no secrets electron-builder skips
+codesign/notarisation entirely, **fuses are still flipped**, and every CI gate still runs. Evidence:
+dry-run `42977816541` (4/4 builds + fuses/asar gates + 4/4 source & packaged smoke, unsigned).
+
+### 5.5 Verify a signed artifact
+
+macOS (a signed+notarised app):
+
+```sh
+codesign -dv --verbose=4 "Focus Mode Agent.app"     # expect Authority=Developer ID Application: …,
+                                                    # TeamIdentifier=<TEAMID>, flags=…runtime
+codesign --verify --deep --strict --verbose=2 "Focus Mode Agent.app"   # exit 0
+spctl -a -vv "Focus Mode Agent.app"                 # accepted, source=Notarized Developer ID
+xcrun stapler validate "focus-mode-agent-<ver>-mac-arm64.dmg"          # staples present
+```
+
+An **unsigned** build still shows Electron's ad-hoc linker signature (`Signature=adhoc`,
+`TeamIdentifier=not set`) and is rejected by `spctl` — that is expected for the unsigned path (§6.2).
+
+Windows:
+
+```sh
+signtool verify /pa /v "focus-mode-agent-<ver>-win-setup.exe"   # Successfully verified
+powershell -c "Get-AuthenticodeSignature 'focus-mode-agent-<ver>-win-setup.exe' | Format-List Status,SignerCertificate,TimeStamperCertificate"
+```
+
+Expect `Status: Valid`, a signer certificate and a timestamp certificate.
+
+### 5.6 Invariant: fuses run **before** signing — never re-flip after signing
+
+`afterPack` → `agent/build/flip-fuses.mjs` runs on the packaged binary **before** electron-builder
+signs it (§11.1). Flipping a fuse modifies the executable bytes and therefore **invalidates any
+existing signature** — so:
+
+- never run `flip-fuses.mjs` against an already-signed artifact; re-signing is required afterwards;
+- if the fuse set or packaging changes, **rebuild** (new workflow run → new artifacts) instead of
+  patching a signed binary;
+- unsigned arm64 macOS builds are ad-hoc re-signed inside the hook by
+  `resetAdHocDarwinSignature: true` (otherwise the modified app refuses to launch).
 
 - **Linux**: no signing required. Optional GPG signing of the AppImage is out of scope (P2).
-
-Signing/notarisation itself is **NEEDS-HUMAN** in this environment: no certificates and no Apple
-Developer account are available in the sandbox, so only the unsigned path is exercised.
 
 ---
 
@@ -278,7 +360,8 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 | Auto-update | Not implemented (P2) | No `electron-updater`, no `latest.yml`/blockmap feed. |
 | `rpm` | Not built | Optional; would need `rpm` tools on the Ubuntu runner. |
 | macOS Intel runner | Deprecated eventually | `macos-15-intel` retires fall 2027 (TD §16) — plan universal build or drop x64 via an ADR before then. |
-| Signing / notarisation | NEEDS-HUMAN | No certificates in this environment; unsigned path only is CI-exercised. |
+| Signing / notarisation | NEEDS-HUMAN | No certificates in this environment; unsigned path only is CI-exercised. Full execution runbook in §5 (T-114). |
+| First public release + admin download links (T-122) | **NEEDS-HUMAN** | No `v*` tag and **0 GitHub Releases** exist yet, so there are no public asset URLs to publish. Post-tag steps: publish draft → list the 8 released asset URLs → `POST /api/v1/admin/agent-links` per OS/arch → verify public `GET /agent-links` + landing/`/settings`; §12 and `RELEASE_HANDOFF.md` §5–§7. |
 | Real install/launch smoke on each OS | NEEDS-HUMAN (T-113/T-102) | Draft release stays draft until a human runs the launch checklist. |
 | `author` missing in `agent/package.json` | Warning only | electron-builder logs `author is missed in the package.json`. macOS/Windows targets are unaffected; `deb` uses `linux.maintainer`. Adding `author` is A7's file (`agent/package.json`) — cosmetic. |
 | `@focus-mode/shared` `.map`/`.d.ts` inside asar | Low | electron-builder ships the dependency's whole `dist/` (maps/declarations included, a few KB). Harmless; can be trimmed later with an `onNodeModuleFile` hook. |
@@ -324,8 +407,8 @@ allowlist), never `--force` in CI.
 
 ## 10. Ownership & change control
 
-- `agent/electron-builder.yml`, `.github/workflows/release.yml`, `agent/build/**`, `docs/RELEASING.md`
-  are A10-owned; review with A7 for agent-runtime impact and A0 for release policy.
+- `agent/electron-builder.yml`, `.github/workflows/release.yml`, `agent/build/**`, `docs/RELEASING.md`,
+  `docs/RELEASE_HANDOFF.md` are A10-owned; review with A7 for agent-runtime impact and A0 for release policy.
 - Changing `appId`, `productName`, targets or artifact naming is a release-visible change: document it
   in the commit and, when it affects users (e.g. appId changes userData path), log an ADR in
   `docs/DECISIONS.md`.
@@ -429,7 +512,7 @@ comment:
 
 | Exempt path | Why it is safe |
 |---|---|
-| `(^|/)\.env\.example$` | committed env **templates** only, values are `CHANGE_ME_*` placeholders |
+| any `.env.example` file (per package) | committed env **templates** only, values are `CHANGE_ME_*` placeholders |
 | `^docs/INTEGRATION_CONTRACTS\.md$` | documentation whose JSON examples deliberately contain fake JWTs / fake HMAC / a fake public key |
 
 The exam-mandated public demo identities (`Admin@123`, `Kabir@123`, `(admin|kabir)@demo.com`) are
@@ -479,3 +562,41 @@ committed or placed under `agent/build/`.
 If a fuse/asar assertion fails in CI, the build is red and must not be released. Do **not** silently
 weaken the fuse set: get A0 approval, record the deviation in `docs/KNOWN_ISSUES.md` (severity + reason)
 and update this section in the same change.
+
+---
+
+## 12. Post-release: publish the draft + admin agent download links (T-122)
+
+**Status: NEEDS-HUMAN** — blocked until the maintainer pushes the first `v*` tag and a GitHub Release
+exists (verified 2026-11-11: `releases → 0`, only the `contracts-v1` tag exists). Dashboard download
+buttons read the **public** `GET /api/v1/agent-links` list (INTEGRATION_CONTRACTS §3.1 #25); admins
+publish rows with `POST /api/v1/admin/agent-links` (#33). The full copy-paste checklist (with the
+real dry-run asset list) is [`RELEASE_HANDOFF.md`](RELEASE_HANDOFF.md) §5–§7; the short version:
+
+1. **Publish the draft** (assets become public only after publishing):
+   `gh release edit v<version> --draft=false` then `gh release view v<version> --json isDraft,assets`.
+2. **List the eight real asset URLs**:
+   `gh api repos/klrajput/Focus-Mode/releases/tags/v<version> --jq '.assets[].browser_download_url'`
+   (pattern `https://github.com/klrajput/Focus-Mode/releases/download/v<version>/<file>`).
+3. **Create one admin link per OS/arch** (four primary links; zip/portable/deb are optional
+   alternates). Payload = `agentLinkCreateSchema`: `{os, arch, label, url, version}` where
+   `os ∈ macOS|windows|linux`, `arch ∈ x64|arm64|universal`, `version` has no leading `v`, and `url`
+   must be absolute **https** on `github.com`/`objects.githubusercontent.com` (server-validated, C-25):
+
+   ```sh
+   API_BASE="https://<api-host>/api/v1"; VER="<version>"
+   BASE="https://github.com/klrajput/Focus-Mode/releases/download/v${VER}"
+   TOKEN=$(curl -sS -X POST "$API_BASE/auth/login" -H 'Content-Type: application/json' \
+     -d '{"email":"admin@demo.com","password":"Admin@123"}' | jq -r '.data.accessToken')
+   curl -sS -X POST "$API_BASE/admin/agent-links" \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"os":"macOS","arch":"arm64","label":"Focus Agent for macOS (Apple silicon)","url":"'"$BASE"'/focus-mode-agent-'"$VER"'-mac-arm64.dmg","version":"'"$VER"'"}'
+   # …repeat for macOS/x64 (…-mac-x64.dmg), windows/x64 (…-win-setup.exe), linux/x64 (…-linux-x86_64.AppImage)
+   ```
+   Expect `201 {"success":true,"data":{id,os,arch,label,url,version,publishedAt}}`.
+4. **Verify**: public `curl -sS "$API_BASE/agent-links" | jq '.data.items[] | {os,arch,url}'` returns
+   them, and the dashboard landing `/` + `/settings` render the links (exact URLs, only https offered).
+5. **Rollback**: `PATCH /api/v1/admin/agent-links/<id>` with a corrected `url` (preferred) or
+   `DELETE /api/v1/admin/agent-links/<id>`; re-check the public list. For bad release assets:
+   `gh release delete-asset` / `gh release delete` on the **draft**; never re-tag a published release —
+   ship a new patch version (§7).
