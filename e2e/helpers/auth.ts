@@ -39,8 +39,19 @@ export async function signInViaUi(
   await page.getByRole('button', { name: 'Log in' }).click();
 
   await expect(page).toHaveURL(/\/dashboard/);
-  // The AppShell only renders for an authenticated user (RequireAuth → AppShell, FR-021).
-  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
+  await expectAppShell(page);
+}
+
+/**
+ * The authenticated AppShell marker: the desktop sidebar nav (>= lg) or the mobile "Open
+ * navigation" button (< lg). Viewport-sensitive so the same helper works in the F-110 spec.
+ */
+export async function expectAppShell(page: Page): Promise<void> {
+  const marker = page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .first()
+    .or(page.getByRole('button', { name: 'Open navigation' }).first());
+  await expect(marker).toBeVisible();
 }
 
 /** Fill `/signup`, submit, and wait until the new account lands on the dashboard (FR-001). */
@@ -56,7 +67,7 @@ export async function signUpViaUi(page: Page, credentials: UiCredentials): Promi
   await page.getByRole('button', { name: 'Create account' }).click();
 
   await expect(page).toHaveURL(/\/dashboard/);
-  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
+  await expectAppShell(page);
 }
 
 /** Assert the login form's real failure banner (UX_SPEC §4.2 copy for 401 UNAUTHENTICATED). */

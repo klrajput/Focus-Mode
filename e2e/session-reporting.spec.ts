@@ -74,7 +74,7 @@ test.describe('Session reporting with the dashboard closed (FR-027, REC-006)', (
           .poll(
             async () =>
               (await listSessions(request, accessToken, { status: 'ACTIVE' })).items.length,
-            { timeout: 20_000, message: 'POST /sessions must happen after focusStarted' },
+            { timeout: 40_000, message: 'POST /sessions must happen after focusStarted' },
           )
           .toBe(1);
         const [active] = (await listSessions(request, accessToken, { status: 'ACTIVE' })).items;

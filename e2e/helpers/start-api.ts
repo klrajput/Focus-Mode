@@ -55,8 +55,21 @@ async function main(): Promise<void> {
   // >= 32 chars so config/env.ts (SEC-2) accepts it; clearly a test placeholder, never a secret.
   setDefault('JWT_SECRET', 'CHANGE_ME_e2e_only_jwt_secret_padding_0000000000');
   setDefault('JWT_EXPIRES_IN', '30m');
-  // Specs log in repeatedly; the product default (10) is for humans, not the harness.
+  // Specs log in repeatedly and the whole suite shares one process; the product limits are for
+  // humans, not the harness. The security spec's 429 burst uses the hardcoded 10/min pair limiter.
   setDefault('RATE_LIMIT_AUTH_MAX', '1000');
+  // env.ts caps: RATE_LIMIT_API_MAX <= 100_000, the per-resource limiters <= 10_000.
+  setDefault('RATE_LIMIT_API_MAX', '100000');
+  for (const name of [
+    'RATE_LIMIT_PUBLIC_MAX',
+    'RATE_LIMIT_INSIGHTS_MAX',
+    'RATE_LIMIT_NOTIFICATIONS_MAX',
+    'RATE_LIMIT_USERS_MAX',
+    'RATE_LIMIT_SESSIONS_MAX',
+    'RATE_LIMIT_ADMIN_MAX',
+  ]) {
+    setDefault(name, '10000');
+  }
   setDefault('MONGO_URI', 'mongodb://127.0.0.1:27017/focus-mode-e2e'); // replaced below
   // KI-006: the sandbox cannot write ~/.cache, so point mongodb-memory-server at the workspace cache.
   setDefault(

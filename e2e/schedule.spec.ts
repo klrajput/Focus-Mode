@@ -26,7 +26,7 @@ import {
   listNotifications,
   listSchedules,
   listSessions,
-  loginUser,
+  registerUser,
   type ApiSchedule,
 } from './helpers/api';
 import {
@@ -216,11 +216,10 @@ test.describe('Missed scheduled run (agent offline)', () => {
     test.slow();
     test.setTimeout(DUE_WAIT_TIMEOUT_MS);
 
-    // API-only fixture: the seeded USER, and NO Focus Agent launched in this test (offline at due).
-    const { accessToken } = await loginUser(request, {
-      email: 'kabir@demo.com',
-      password: 'Kabir@123',
-    });
+    // API-only fixture: a FRESH user (no devices, no sessions) and NO Focus Agent launched here —
+    // another spec's leftover ACTIVE session can never make this offline-at-due-time test flaky.
+    const { auth } = await registerUser(request);
+    const accessToken = auth.accessToken;
 
     // The seed already contains one SCHEDULE_MISSED notification; take a baseline so only the NEW
     // notification created for this schedule can satisfy the assertion (no false positive).

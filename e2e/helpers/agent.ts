@@ -47,6 +47,11 @@ export interface LaunchAgentOptions {
   headless?: boolean;
   /** Extra environment variables for the agent process (test seams only). */
   env?: Record<string, string>;
+  /**
+   * Reuse an existing `app.getPath('userData')` directory (reconnect/relaunch tests). The helper
+   * then does NOT delete it on close — the caller owns the directory lifecycle.
+   */
+  userDataDir?: string;
 }
 
 export interface LaunchedAgent {
@@ -56,13 +61,20 @@ export interface LaunchedAgent {
   window: Page;
   /** The 6-digit pairing code read from `#pairing-code`, digits only. */
   pairingCode: string;
-  /** Throwaway `app.getPath('userData')` directory used for this run. */
+  /** `app.getPath('userData')` directory used for this run (temp unless `userDataDir` was given). */
   userDataDir: string;
   /** Read the code again (e.g. after the agent rotates it on a failed pairing). */
   readPairingCode(): Promise<string>;
   /** Read the agent's visible state line (`#state-line`). */
   readStateLine(): Promise<string>;
-  /** Quit the agent and remove the temp user-data directory. Safe to call twice. */
+  /** Hard-kill the Electron process (SIGKILL) — simulates a real crash (T-080). */
+  killProcess(): void;
+  /**
+   * Relaunch the agent with the SAME userData directory (device token / journal state survive),
+   * e.g. after `killProcess()`. Resolves to a fresh handle; the returned agent owns the dir.
+   */
+  relaunch(): Promise<LaunchedAgent>;
+  /** Quit the agent and remove the temp user-data directory (only when the helper created it). */
   close(): Promise<void>;
 }
 
@@ -126,7 +138,8 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
  * Requires a compiled agent: `npm run build -w @focus-mode/agent` (root `pretest:e2e` does this).
  */
 export async function launchAgent(options: LaunchAgentOptions = {}): Promise<LaunchedAgent> {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), 'focus-agent-e2e-'));
+  const ownedUserDataDir = options.userDataDir === undefined;
+  const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), 'focus-agent-e2e-'));
   // Resolved through Node (not hard-coded) so a local/CI Electron version bump keeps working.
   const electronExecutable = require('electron') as string;
 
@@ -160,14 +173,22 @@ export async function launchAgent(options: LaunchAgentOptions = {}): Promise<Lau
         // A wedged renderer must not mask the actual test failure: kill and clean up.
         app.process().kill('SIGKILL');
       } finally {
-        rmSync(userDataDir, { recursive: true, force: true });
+        if (ownedUserDataDir) rmSync(userDataDir, { recursive: true, force: true });
       }
     };
 
-    // If the app exits on its own, still remove the temp profile.
-    app.on('close', () => {
-      rmSync(userDataDir, { recursive: true, force: true });
-    });
+    // NOTE: the profile is deliberately NOT removed on an unexpected process exit — the
+    // kill/relaunch reconnect test needs the journal (and stored token) to survive a SIGKILL.
+    // Only an explicit `close()` cleans up a helper-owned directory.
+
+    const killProcess = (): void => {
+      const child = app.process();
+      if (child === undefined || child.killed || child.exitCode !== null) return;
+      // A real crash: SIGKILL, no graceful shutdown, no cleanup — the userData dir must stay.
+      child.kill('SIGKILL');
+    };
+
+    const relaunch = async (): Promise<LaunchedAgent> => launchAgent({ ...options, userDataDir });
 
     return {
       app,
@@ -176,6 +197,8 @@ export async function launchAgent(options: LaunchAgentOptions = {}): Promise<Lau
       userDataDir,
       readPairingCode: () => extractPairingCode(window),
       readStateLine: async () => (await window.locator('#state-line').textContent()) ?? '',
+      killProcess,
+      relaunch,
       close,
     };
   } catch (error) {
@@ -183,7 +206,7 @@ export async function launchAgent(options: LaunchAgentOptions = {}): Promise<Lau
     try {
       app.process().kill('SIGKILL');
     } finally {
-      rmSync(userDataDir, { recursive: true, force: true });
+      if (ownedUserDataDir) rmSync(userDataDir, { recursive: true, force: true });
     }
     throw error;
   }

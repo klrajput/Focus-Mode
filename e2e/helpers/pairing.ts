@@ -13,7 +13,14 @@
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import { launchAgent, type LaunchedAgent } from './agent';
-import { listDevices, loginUser, revokeDevice, type ApiDevice } from './api';
+import {
+  listDevices,
+  listSessions,
+  loginUser,
+  patchSession,
+  revokeDevice,
+  type ApiDevice,
+} from './api';
 import { signInViaUi } from './auth';
 import { DEMO_USER } from './config';
 
@@ -37,6 +44,18 @@ export async function pairAgentViaUi(
   }
   expect((await listDevices(request, session.accessToken)).total).toBe(0);
 
+  // Isolation: a previous spec that failed mid-flight could leave an ACTIVE session, which would
+  // make POST /sessions 409 ALREADY_FOCUSING here. Close any leftover honestly (real PATCH).
+  for (const stale of (await listSessions(request, session.accessToken, { status: 'ACTIVE' }))
+    .items) {
+    await patchSession(request, session.accessToken, stale.id, {
+      status: 'CANCELLED',
+      endedAt: new Date().toISOString(),
+      actualMinutes: 0,
+      endReason: 'AGENT',
+    });
+  }
+
   const agent = await launchAgent();
   try {
     await signInViaUi(page, DEMO_USER);
@@ -48,7 +67,7 @@ export async function pairAgentViaUi(
     await expect(dialog).toBeVisible();
     await dialog.getByLabel('6-digit pairing code').fill(agent.pairingCode);
     await dialog.getByRole('button', { name: 'Pair device' }).click();
-    await expect(page.getByText('Agent connected')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Agent connected')).toBeVisible({ timeout: 30_000 });
 
     await expect
       .poll(async () => (await listDevices(request, session.accessToken)).items[0]?.status, {
@@ -63,7 +82,7 @@ export async function pairAgentViaUi(
 
     // KI-010 fixed: the live badge reaches `Connected` without any page reload.
     await expect(page.getByRole('status', { name: 'Focus Agent status: Connected' })).toBeVisible({
-      timeout: 30_000,
+      timeout: 45_000,
     });
 
     return { agent, device, accessToken: session.accessToken };

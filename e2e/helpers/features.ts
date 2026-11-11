@@ -185,3 +185,29 @@ export function clientSettingsUiShipped(): boolean {
   const page = readIfExists('client/src/pages/settings.tsx');
   return /useChangePassword|Update password/.test(page) && /Unpair all|Download/.test(page);
 }
+
+// ---------------------------------------------------------------------------------------------
+// W6 hardening probes (A5) — the security spec tightens its assertions when these land.
+// ---------------------------------------------------------------------------------------------
+
+/** A5 W6: global/per-resource rate-limit middleware now actually wraps the API routers. */
+export function apiRateLimitMiddlewareShipped(): boolean {
+  const app = readIfExists('server/src/app.ts');
+  const routes = readIfExists('server/src/routes/index.ts');
+  return app.includes('createApiRateLimiter') || routes.includes('createApiRateLimiter');
+}
+
+/** A5 W6: CORS no longer sends credentials (A0-announced change: `credentials: false`). */
+export function corsCredentialsDisabledShipped(): boolean {
+  return readIfExists('server/src/app.ts').includes('credentials: false');
+}
+
+/** A5 W6: malformed ObjectId path params are mapped to 404 NOT_FOUND (CastError/BSONError → 404). */
+export function objectIdNotFoundShipped(): boolean {
+  const errorMiddleware = readIfExists('server/src/middlewares/error.ts');
+  const mongoErrors = readIfExists('server/src/utils/mongo-errors.ts');
+  return (
+    errorMiddleware.includes('isInvalidObjectIdError') &&
+    mongoErrors.includes('export function isInvalidObjectIdError')
+  );
+}

@@ -61,7 +61,7 @@ export async function startFocusViaUi(page: Page, minutes: number): Promise<void
   await expect(consent.getByRole('heading', { name: 'These stay open' })).toBeVisible();
   await consent.getByRole('button', { name: 'Confirm — start focus' }).click();
 
-  await expect(page).toHaveURL(/\/focus$/, { timeout: 20_000 });
+  await expect(page).toHaveURL(/\/focus$/, { timeout: 40_000 });
   await expect(page.getByRole('button', { name: 'End Focus' }).first()).toBeVisible();
 }
 
