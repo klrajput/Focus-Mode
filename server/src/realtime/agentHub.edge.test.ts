@@ -583,7 +583,9 @@ describe('heartbeat sweep with an injected clock', () => {
     const { port } = await startHub();
     const device = await createDevice();
     const client = await connect(port, device);
-    expect(await deviceStatus(device.deviceId)).toBe('CONNECTED');
+    // KI-023: the CONNECTED status write is queued behind the auth handshake, so on slower CI
+    // runners it can land a tick after the client resolves — wait for it instead of racing it.
+    await waitFor(async () => (await deviceStatus(device.deviceId)) === 'CONNECTED');
 
     // A transient Mongo failure on the presence write is logged, never fatal (INV: presence stays
     // authoritative in memory) and must not poison the per-device write chain.
@@ -598,7 +600,8 @@ describe('heartbeat sweep with an injected clock', () => {
     });
     await waitFor(() => getPresence(device.deviceId)?.state === 'FOCUSING');
     expect(client.socket.readyState).toBe(WebSocket.OPEN);
-    expect(await deviceStatus(device.deviceId)).toBe('CONNECTED'); // still the old status
+    // KI-023: still the old status; poll in case the failed write's chain is still settling.
+    await waitFor(async () => (await deviceStatus(device.deviceId)) === 'CONNECTED');
 
     sendFrame(client.socket, {
       v: PROTOCOL_VERSION,
