@@ -221,6 +221,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Windows packaged smoke needs the app payload shipped *inside* the installer. Running the
+      # NSIS installer UI in a non-interactive CI session hung for 30 min (first W7 dispatch), so the
+      # exact `win-unpacked` payload that the NSIS installer installs is uploaded separately and
+      # booted instead. The artifact name deliberately does NOT match `focus-agent-*`, so it never
+      # becomes a draft-release asset.
+      - name: Upload Windows unpacked app (packaged-smoke input)
+        if: matrix.name == 'windows-x64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64-unpacked
+          path: agent/release/win-unpacked
+          if-no-files-found: error
+          retention-days: 7
+
   smoke:
     # T-113: real AGENT_SMOKE runs on every OS. This job asserts:
     #   1. the build job really produced the expected installers for this OS — they are downloaded
@@ -228,9 +242,10 @@ jobs:
     #   2. the source-built agent (`agent/dist`) starts with AGENT_SMOKE=1, binds 127.0.0.1,
     #      answers `hello` (paired=false, IDLE) + `getState` (IDLE, no session) and exits 0
     #      (`scripts/smoke/launch.mjs`, 20 s failsafe);
-    #   3. (W7) the *installed artifact* itself boots: the packaged app is extracted from the
-    #      artifact (macOS zip → .app, Windows NSIS silent install, Linux AppImage extract) and
-    #      driven through the same AGENT_SMOKE contract by
+    #   3. (W7) the *installed artifact* itself boots: the packaged app payload is taken from the
+    #      artifact (macOS zip → .app; Windows `windows-x64-unpacked` payload = the exact files the
+    #      NSIS installer installs, because running the installer UI in a non-interactive runner hung;
+    #      Linux AppImage extract) and driven through the same AGENT_SMOKE contract by
     #      `scripts/verify/smoke-packaged.mjs` with the REAL focus driver (packaged builds reject
     #      the fake driver by design) and no focus applied. This exercises the asar layout, the
     #      flipped fuses and app-update metadata for real.
@@ -280,6 +295,15 @@ jobs:
           name: focus-agent-${{ matrix.name }}
           path: smoke-assets
 
+      # Windows cannot be smoke-booted from the NSIS installer in CI (launcher hang), so the build
+      # job uploads the exact `win-unpacked` payload the installer installs. See the upload comment.
+      - name: Download Windows unpacked app (packaged-smoke input)
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-x64-unpacked
+          path: smoke-unpacked
+
       - name: Verify installer artifacts (sizes + sha256)
         shell: bash
         env:
@@ -320,11 +344,11 @@ jobs:
           process.exit(failures === 0 ? 0 : 1);
           NODE
 
-      # Extraction per OS, because the artifact only contains installers:
+      # Extraction per OS, because the released artifact contains installers, not app dirs:
       #  * macOS: unzip the produced .zip → "Focus Mode Agent.app";
-      #  * Windows: silent NSIS install (/S) into a temp dir → installed .exe. The portable exe is a
-      #    self-extractor and would hide the real process/stdout from the smoke driver, so the
-      #    installer is used instead;
+      #  * Windows: use the `windows-x64-unpacked` artifact (the exact payload the NSIS installer
+      #    installs). Running the assisted-installer UI in a non-interactive runner session hung
+      #    for 30 min in the first W7 dispatch, so the installer is not executed here;
       #  * Linux: AppImage `--appimage-extract` (no FUSE needed on the runner) → squashfs-root.
       - name: Extract packaged app from the installer artifact
         shell: bash
@@ -336,17 +360,10 @@ jobs:
             unzip -q smoke-assets/*.zip -d packaged
             EXE=$(find packaged -maxdepth 1 -name '*.app' -type d | head -n 1)
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            INSTALL_DIR="$RUNNER_TEMP/focus-agent-smoke-install"
-            rm -rf "$INSTALL_DIR"
-            WIN_DIR=$(cygpath -w "$INSTALL_DIR")
-            echo "running NSIS silent install: setup.exe /S /D=$WIN_DIR"
-            ./smoke-assets/*-win-setup.exe /S "/D=$WIN_DIR"
-            for _ in $(seq 1 30); do
-              EXE=$(find "$INSTALL_DIR" -maxdepth 3 -name '*.exe' \
-                ! -name 'Uninstall*.exe' ! -name 'elevate.exe' | head -n 1 || true)
-              if [ -n "${EXE:-}" ]; then break; fi
-              sleep 1
-            done
+            EXE=$(find smoke-unpacked -maxdepth 2 -name '*.exe' \
+              ! -name 'elevate.exe' ! -name 'crashpad_handler.exe' ! -name 'notification_helper.exe' \
+              | head -n 1 || true)
+            if [ -n "${EXE:-}" ]; then echo "using win-unpacked payload: $EXE"; fi
           else
             chmod +x smoke-assets/*.AppImage
             ( cd packaged && "$GITHUB_WORKSPACE"/smoke-assets/*.AppImage --appimage-extract >/dev/null )
@@ -354,8 +371,9 @@ jobs:
             if [ -n "${EXE:-}" ]; then chmod +x "$EXE"; fi
           fi
           if [ -z "${EXE:-}" ]; then
-            echo "FAIL: could not extract a packaged executable from the installer artifact"
+            echo "FAIL: could not extract a packaged executable from the artifact"
             ls -la packaged 2>/dev/null || true
+            ls -la smoke-unpacked 2>/dev/null || true
             exit 1
           fi
           echo "PACKAGED_EXECUTABLE=$EXE" >> "$GITHUB_ENV"

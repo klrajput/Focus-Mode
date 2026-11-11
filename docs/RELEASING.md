@@ -274,7 +274,7 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 | Item | Status | Notes |
 |---|---|---|
 | `AGENT_SMOKE=1` launch hook + per-OS smoke job (T-113) | **DONE (W4)** | `agent/src/main.ts` has the hook; `scripts/smoke/launch.mjs` proven locally and the `smoke` job now runs on every OS (`needs: build`) and gates the draft release (`release.needs: [build, smoke]`). Asserts installers exist + sha256, `SMOKE_READY`, `hello.paired=false`, `getState.state=IDLE`, self exit 0 within 20 s. Linux under Xvfb. |
-| Installer-level launch from the artifact (T-113 follow-up) | **DONE (W7)** | The smoke job now extracts the packaged app from the **uploaded artifact** (macOS zip → `.app`; Windows NSIS silent install → installed `.exe`; Linux `AppImage --appimage-extract` → `squashfs-root`) and boots it with `AGENT_SMOKE=1` via `scripts/verify/smoke-packaged.mjs` using the **real** focus driver (packaged builds reject `AGENT_FOCUS_DRIVER=fake` by design) and no focus applied (state must stay `IDLE`). The source-built `agent/dist` smoke is retained as an extra signal. This exercises the real asar layout + flipped fuses (see §11.3). |
+| Installer-level launch from the artifact (T-113 follow-up) | **DONE (W7)** | The smoke job now boots the packaged app from the **uploaded artifact** (macOS zip → `.app`; Windows `windows-x64-unpacked` payload — the installer UI is not run in CI; Linux `AppImage --appimage-extract` → `squashfs-root`) and boots it with `AGENT_SMOKE=1` via `scripts/verify/smoke-packaged.mjs` using the **real** focus driver (packaged builds reject `AGENT_FOCUS_DRIVER=fake` by design) and no focus applied (state must stay `IDLE`). The source-built `agent/dist` smoke is retained as an extra signal. This exercises the real asar layout + flipped fuses (see §11.3). |
 | Auto-update | Not implemented (P2) | No `electron-updater`, no `latest.yml`/blockmap feed. |
 | `rpm` | Not built | Optional; would need `rpm` tools on the Ubuntu runner. |
 | macOS Intel runner | Deprecated eventually | `macos-15-intel` retires fall 2027 (TD §16) — plan universal build or drop x64 via an ADR before then. |
@@ -411,7 +411,7 @@ from the uploaded installer artifact** and boots it through the same `AGENT_SMOK
 | OS | Extraction | Launcher |
 |---|---|---|
 | macOS | `unzip` the produced `.zip` → `Focus Mode Agent.app` | `node scripts/verify/smoke-packaged.mjs "<…>.app"` |
-| Windows | silent NSIS install (`setup.exe /S /D=<temp>`) → installed `.exe` | `node scripts/verify/smoke-packaged.mjs "<installed>.exe"` |
+| Windows | build job uploads `windows-x64-unpacked` (the exact payload the NSIS installer installs) → installer is **not executed** in CI because its UI hangs in a non-interactive runner session | `node scripts/verify/smoke-packaged.mjs "<win-unpacked>.exe"` |
 | Linux | `AppImage --appimage-extract` (no FUSE needed) → `squashfs-root/focus-mode-agent` | `xvfb-run -a node scripts/verify/smoke-packaged.mjs "<binary>"` |
 
 The packaged run uses `AGENT_FOCUS_DRIVER=real` (packaged builds deliberately reject `fake`) and the
