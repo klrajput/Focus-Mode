@@ -105,12 +105,12 @@ describe('LandingPage', () => {
     renderLanding();
 
     const mac = await screen.findByRole('link', {
-      name: 'Download Focus Agent for macOS — version 1.4.0',
+      name: 'Download Focus Agent for macOS · 1.4.0',
     });
     expect(mac).toHaveAttribute('href', MAC_LINK.url);
 
     const windows = screen.getByRole('link', {
-      name: 'Download Focus Agent for Windows — version 1.4.0',
+      name: 'Download Focus Agent for Windows · 1.4.0',
     });
     expect(windows).toHaveAttribute('href', WINDOWS_LINK.url);
 
@@ -153,7 +153,7 @@ describe('LandingPage', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(
       await screen.findByRole('link', {
-        name: 'Download Focus Agent for macOS — version 1.4.0',
+        name: 'Download Focus Agent for macOS · 1.4.0',
       }),
     ).toBeInTheDocument();
   });

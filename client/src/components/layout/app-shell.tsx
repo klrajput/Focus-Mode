@@ -142,7 +142,7 @@ function AccountMenu() {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Account menu for ${user.name}`}
+        aria-label={`Account menu for ${user.name} ${initial}`}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
           if (event.key === 'Escape') setOpen(false);

@@ -94,7 +94,7 @@ export function DownloadLinks({ className }: { className?: string }) {
                 <li key={link.id} className="min-w-0">
                   <a
                     href={link.url}
-                    aria-label={`Download ${link.label} — version ${link.version}`}
+                    aria-label={`Download ${link.label} · ${link.version}`}
                     className="inline-flex min-h-11 max-w-full items-center gap-2 rounded-[var(--radius-control)] border border-border-strong bg-card px-3 text-sm font-medium text-primary hover:bg-primary-subtle focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface focus-visible:outline-none"
                   >
                     <Download aria-hidden="true" className="h-4 w-4 shrink-0" />

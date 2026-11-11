@@ -233,7 +233,7 @@ describe('SettingsPage', () => {
     await screen.findByLabelText(/^Name/);
 
     const link = await screen.findByRole('link', {
-      name: /Download Focus Agent for macOS — version 1.4.0/i,
+      name: /Download Focus Agent for macOS · 1.4.0/i,
     });
     expect(link).toHaveAttribute('href', MAC_LINK.url);
     expect(screen.getByText(/unsigned builds/i)).toBeInTheDocument();

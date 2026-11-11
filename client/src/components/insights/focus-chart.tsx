@@ -1,6 +1,6 @@
 /*
  * FocusChart — the Recharts daily/weekly bar chart for `/insights` (UX_SPEC §4.8, FR-013).
- * The bar chart is decorative for assistive tech (`aria-hidden`), so every number is also present
+ * The bar chart exposes an accessible image label and every number is also present
  * as (a) a plain-language summary in a live region and (b) a disclosure table with the same data.
  * 7 days render one bar per local day; 30/90 days are aggregated by local week so the x-axis stays
  * readable and never invents a day that is not in the API response.
@@ -136,8 +136,14 @@ export function FocusChart({ series, timezone }: { series: ChartSeries; timezone
       {/* Accessible equivalent #1: one plain-language sentence, always in the DOM. */}
       <p className="sr-only">{series.summary}</p>
 
-      {/* The SVG itself is decorative; the summary and table carry the data. */}
-      <div aria-hidden="true" role="presentation" className="mt-3 h-[220px] w-full">
+      {/* role=img + aria-label: the SVG is presentational to AT, summary + table carry the data. */}
+      <div
+        role="img"
+        aria-label={`Bar chart of ${series.bucket === 'day' ? 'daily' : 'weekly'} focus minutes: ${series.points
+          .map((point) => `${point.label} ${point.minutes}`)
+          .join(', ')}. The same numbers are listed in the table below.`}
+        className="mt-3 h-[220px] w-full"
+      >
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={series.points} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
