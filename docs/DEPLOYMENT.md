@@ -46,7 +46,7 @@ Everything below needed from the human is also listed in **§11 NEEDS-HUMAN**.
 
 ## 4. API on Render (or Railway)
 
-The API needs: persistent process, WebSocket support, Node 22, one open port from `PORT`, and in-process cron. Render supports native WebSockets; Railway does too. Neither file below is in the repo yet — **A0/A10 place them** after review (the repo root currently has no `render.yaml`/`vercel.json`).
+The API needs: persistent process, WebSocket support, Node 22, one open port from `PORT`, and in-process cron. Render supports native WebSockets; Railway does too. Both configs are now **placed at the repo root** (`render.yaml`, `vercel.json`; W9, A0) and validated to parse — review them before the first deploy and replace the placeholder API host in `vercel.json` (below).
 
 `render.yaml` sketch (for A0/A10 to place at the repo root; `sync: false` = set in the Render dashboard, never committed):
 
@@ -136,7 +136,7 @@ Additional consequence: the agent heartbeat (15 s during a session) keeps the AP
 
 The dashboard is a static Vite SPA that calls the API **same-origin** at `/api/v1`. The same-origin rewrite keeps the Bearer-token/session-storage model working without third-party cookies (the P2 refresh-cookie ideas in `TECHNICAL_DESIGN` §5.2 stay unnecessary) and avoids CORS in the browser.
 
-`vercel.json` content to place at the repo root (not present yet — **A0/A10 to place**; `test-browser` note: with the repo-root directory Vercel cannot infer the client output, so the build settings are explicit):
+`vercel.json` is placed at the repo root; its content is (replace `<api-host>`/the `onrender.com` placeholder with your real API URL after the API is deployed):
 
 ```json
 {
