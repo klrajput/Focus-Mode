@@ -7,8 +7,8 @@
 >
 > Environment: macOS 15.7.7 arm64 · Node 26.11.1 · Playwright 1.65.0 (Chromium 158) ·
 > Vitest 5.1.0 + `@vitest/coverage-v8` 5.1.0. E2E API = real Express app + in-memory MongoDB seeded
-> with the DEC-013 demo data, served on loopback with the E2E rate-limit knobs. Measurements taken
-> 2026-11-10 ~23:36 IST on this dev machine — **loopback, not production hardware or network**.
+> with the DEC-013 demo data, served on loopback with the E2E rate-limit knobs. Measurements re-run at the W6 gate
+> 2026-11-11 ~05:30 IST on this dev machine — **loopback, not production hardware or network**.
 
 ## 1. NFR-011 — API latency
 
@@ -77,10 +77,10 @@ thresholds configured, so this is measurement rather than a gate).
 | workspace | test files | tests (all pass) | % stmts | % branch | % funcs | % lines |
 |---|---|---|---|---|---|---|
 | `shared` | 8 | 175 | 100.00 | 95.45 | 100.00 | 100.00 |
-| `server` | 20 | 302 | 87.64 | 75.68 | 93.10 | 89.28 |
-| `client` | 25 | 156 | 79.24 | 73.13 | 80.17 | 81.59 |
+| `server` | 22 | 345 | 87.71 | 76.30 | 93.28 | 89.44 |
+| `client` | 26 | 171 | 78.61 | 72.68 | 80.43 | 80.70 |
 | `agent` | 36 | 513 | 85.91 | 77.33 | 85.71 | 88.63 |
-| **total** | **89** | **1146** | — | — | — | — |
+| **total** | **92** | **1204** | — | — | — | — |
 
 Coverage target from TECHNICAL_DESIGN §14 is **80 % lines on `shared`, `server/services`,
 `agent/focus`** (excluding drivers' OS calls): `shared` 100 %, `server/services` 91.87 %,
@@ -128,3 +128,22 @@ suite is the executable proof behind the numbers in §1 and the live report is i
   `@axe-core/playwright` adapter are A4/A9's (W7 / T-084); adding one here without fixing findings
   would either block the gate or be a fake pass.
 - API latency numbers are loopback-only (see §1 caveat); bundle has no requirement threshold (§2).
+
+## 6. W6-gate re-measurement (A0, final merged tree)
+
+After the W6 branches merged (`439792b` + E2E fixes), A0 re-ran the same commands on `main`:
+
+- **Unit/integration:** `175 (shared) + 345 (server) + 171 (client) + 513 (agent) = 1204 passed`, 0 failed
+  (the earlier table above has been updated to these final numbers; the first draft predated the
+  W6 follow-up tests).
+- **Coverage:** `shared` 100.00 % lines / 95.45 % branch · `server` 89.44 % / 76.30 % · `client`
+  80.70 % / 72.68 % · `agent` 88.63 % / 77.33 % (v8 provider, defaults). The TECHNICAL_DESIGN §14
+  80 %-lines target is met by every package; the weakest files listed above are unchanged candidates
+  for W7 (server `utils/mongo-errors.ts` is now covered by the CastError→404 tests, so its number
+  should rise on the next run — re-check in W7).
+- **E2E:** the W6 suite is **47 tests across 14 files** (adds `reconnect`, `viewport` ×4, `security`
+  ×8, `perf`); the W6 gate run is recorded in `docs/AGENT_STATUS.md`. Two harness bugs found at the
+  gate were fixed and re-verified: the reconnect spec was missing the REC-004 native-dialog stub and
+  shared the demo user (DEC-017 per-user pairing latch), and the missed-run spec used a fresh user
+  whose timezone default (UTC) did not match the schedule timezone it computed (Asia/Kolkata).
+- **NFR-011:** unchanged from §1 (worst p95 **7.22 ms** vs the 300 ms target, loopback measurement).

@@ -85,10 +85,10 @@ export function createAuthRateLimiter(limit: number): RequestHandler {
   });
 }
 
-/** SEC-4/§1.9: `POST /agent/register` — 5/min/IP (frozen contract value). */
+/** SEC-4/§1.9: `POST /agent/register` — 5/min/IP by contract (env knob only for test harnesses). */
 export function createAgentRegisterRateLimiter(): RequestHandler {
   return minuteLimiter(
-    5,
+    env.RATE_LIMIT_AGENT_REGISTER_MAX,
     'agent-register',
     'ip',
     'Too many pairing registrations from this address. Please try again in a minute.',

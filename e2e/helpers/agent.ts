@@ -68,7 +68,7 @@ export interface LaunchedAgent {
   /** Read the agent's visible state line (`#state-line`). */
   readStateLine(): Promise<string>;
   /** Hard-kill the Electron process (SIGKILL) — simulates a real crash (T-080). */
-  killProcess(): void;
+  killProcess(): Promise<void>;
   /**
    * Relaunch the agent with the SAME userData directory (device token / journal state survive),
    * e.g. after `killProcess()`. Resolves to a fresh handle; the returned agent owns the dir.
@@ -118,6 +118,34 @@ async function extractPairingCode(window: Page): Promise<string> {
     );
   }
   return code;
+}
+
+/**
+ * Resolve once nothing accepts connections on `port` (the killed agent's loopback link is gone).
+ * Why: SIGKILL returns immediately, but the OS may still deliver the socket to the new process on a
+ * fast relaunch; the reconnect spec relaunches on the same AGENT_PORT, and an EADDRINUSE race there
+ * means the agent cannot serve a challenge and the badge never re-attests (seen only in the full
+ * suite, where the machine is busier).
+ */
+async function waitForPortReleased(port: number, timeoutMs: number): Promise<void> {
+  const net = await import('node:net');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const open = await new Promise<boolean>((resolve) => {
+      const socket = net.connect({ host: '127.0.0.1', port });
+      const done = (value: boolean): void => {
+        socket.destroy();
+        resolve(value);
+      };
+      socket.setTimeout(500);
+      socket.once('connect', () => done(true));
+      socket.once('error', () => done(false));
+      socket.once('timeout', () => done(false));
+    });
+    if (!open) return;
+    if (Date.now() > deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 /** Wait at most `ms` for `promise`, then reject (used for a wedged Electron close). */
@@ -181,11 +209,21 @@ export async function launchAgent(options: LaunchAgentOptions = {}): Promise<Lau
     // kill/relaunch reconnect test needs the journal (and stored token) to survive a SIGKILL.
     // Only an explicit `close()` cleans up a helper-owned directory.
 
-    const killProcess = (): void => {
+    const killProcess = async (): Promise<void> => {
       const child = app.process();
       if (child === undefined || child.killed || child.exitCode !== null) return;
       // A real crash: SIGKILL, no graceful shutdown, no cleanup — the userData dir must stay.
+      const exited = new Promise<void>((resolve) => {
+        if (child.exitCode !== null) {
+          resolve();
+          return;
+        }
+        child.once('exit', () => resolve());
+      });
       child.kill('SIGKILL');
+      // Wait for the process AND its loopback port before a relaunch can bind the same AGENT_PORT.
+      await withTimeout(exited, 15_000, 'Focus Agent SIGKILL exit').catch(() => undefined);
+      await waitForPortReleased(E2E_AGENT_PORT, 10_000);
     };
 
     const relaunch = async (): Promise<LaunchedAgent> => launchAgent({ ...options, userDataDir });

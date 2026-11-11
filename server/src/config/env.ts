@@ -66,6 +66,12 @@ const envSchema = z
     RATE_LIMIT_ADMIN_MAX: z.coerce.number().int().min(1).max(10_000).default(120),
     /** Per-IP limit for public/unauthenticated endpoints (agent links, attest key, …). */
     RATE_LIMIT_PUBLIC_MAX: z.coerce.number().int().min(1).max(10_000).default(60),
+    /**
+     * SEC-4 `POST /agent/register` ceiling, requests/min/IP. Contract value is 5/min (frozen); the
+     * knob exists only so automated suites that launch several real agents from 127.0.0.1 in one
+     * minute are not rejected by their own harness (E2E sets it high, production keeps the default).
+     */
+    RATE_LIMIT_AGENT_REGISTER_MAX: z.coerce.number().int().min(1).max(10_000).default(5),
     /** SEC-5 pairing pepper: HMAC-SHA256 key for the pairing digest (DEC-014). */
     PAIR_PEPPER: z
       .string()
@@ -162,6 +168,8 @@ export const env = Object.freeze({
   RATE_LIMIT_SESSIONS_MAX: config.RATE_LIMIT_SESSIONS_MAX,
   RATE_LIMIT_ADMIN_MAX: config.RATE_LIMIT_ADMIN_MAX,
   RATE_LIMIT_PUBLIC_MAX: config.RATE_LIMIT_PUBLIC_MAX,
+  /** SEC-4 `/agent/register` ceiling (default 5/min/IP; E2E raises it — see schema comment). */
+  RATE_LIMIT_AGENT_REGISTER_MAX: config.RATE_LIMIT_AGENT_REGISTER_MAX,
   /** SEC-5 pepper; undefined in dev when unconfigured (pairing then answers 500 INTERNAL). */
   PAIR_PEPPER: config.PAIR_PEPPER ?? ephemeralTestSecrets?.pairPepper,
   /** SEC-7 PEM keypair; undefined in dev when unconfigured (attestation then answers 500). */

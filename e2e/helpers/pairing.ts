@@ -35,8 +35,9 @@ export interface PairedAgentFixture {
 export async function pairAgentViaUi(
   page: Page,
   request: APIRequestContext,
+  credentials: Pick<UiCredentials, 'email' | 'password'> = DEMO_USER,
 ): Promise<PairedAgentFixture> {
-  const session = await loginUser(request, DEMO_USER);
+  const session = await loginUser(request, credentials);
 
   // Deterministic target: the seed ships demo devices; unpair them through the real API first.
   for (const seededDevice of (await listDevices(request, session.accessToken)).items) {
@@ -58,7 +59,7 @@ export async function pairAgentViaUi(
 
   const agent = await launchAgent();
   try {
-    await signInViaUi(page, DEMO_USER);
+    await signInViaUi(page, credentials);
     await page.getByRole('link', { name: 'Devices' }).first().click();
     await expect(page).toHaveURL(/\/devices$/);
 

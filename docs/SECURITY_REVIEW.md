@@ -500,3 +500,29 @@ Totals: `grep -c '^\[PASS\]'` = **132**, `grep -c '^\[FAIL\]'` = **16** (148 che
 | `a9-depth.ts` | JSON-depth threshold probe (4 checks) |
 | `a9-final.ts` | registration role injection, enrollment oracle, inline-script audit (6 checks) |
 | `a9-authoritative.sh` | the clean re-run driver used for this report |
+
+## 8. W6 re-verification on the final merged tree (2026-11-11)
+
+> **Attribution:** this section is a **Lead (A0) spot-check on the final merged tree**, not a full
+> independent re-run by A9. A9's findings were fixed by A5 in `439792b` and re-verified here through
+> A5's regression tests (`server/src/test/w6-followup-hardening.test.ts`, 12 tests) plus targeted
+> probes/observations on `main`. The original A9 report (§§1–7) stands as the independent attack
+> log; this section records only what was re-run after the fixes.
+
+Commits verified: `439792b` (A5 W6 follow-ups) on top of `8dceac1`/`05e6187`.
+
+| Finding | Severity | Re-verification evidence | Verdict |
+|---|---|---|---|
+| **F-01** malformed ObjectId → 500 | Medium | `w6-followup-hardening.test.ts` asserts `DELETE /devices/not-an-objectid`, `POST /devices/:id/attest`, `PATCH /sessions/:id`, `POST /allowlist/preset/:id` → **404 NOT_FOUND** with the standard envelope and no stack trace (`CastError`/`BSONError` mapped centrally in `utils/mongo-errors.ts`). Test run: **22 files / 345 tests pass**. | **FIXED** |
+| **F-02** deep-JSON stack overflow | Medium | `findForbiddenKeys` is now an explicit-stack iterative walk. Tests assert 4 000/12 000/20 000-deep arrays and 4 000/8 000-deep objects → **400 VALIDATION_ERROR** (never 500, no RangeError), an operator hidden at ~4 000 depth is still rejected as forbidden keys, and a legitimate 50-deep payload validates normally. | **FIXED** |
+| **F-03** deactivation does not revoke/stop | Medium | Tests assert: device token on `/agent/allowlist` after `isActive:false` → **403 ACCOUNT_DISABLED**; agent-reported `session.started` for a deactivated owner is refused with **0 sessions persisted**; a due schedule of an inactive user produces **no `scheduleDue`, no `ScheduleRun`, no notification** and leaves `lastRunAt` untouched; admin deactivation calls `revokeAllDevicesForUser` (2 `revokeDevice` pushes + device rows deleted in the test). | **FIXED** |
+| **F-04** enroll-poll state oracle | Low | Not changed in W6 (out of the hardening scope agreed for this wave). Behaviour remains as reported (410 vs 404 after consumption, no token leak). Tracked as KI-018. | **OPEN (accepted for W6)** |
+| **F-05** tokens survive password change/logout | Low | Unchanged by design (stateless 30-min access token, `sessionStorage`). Documented accepted risk (KI-019). | **ACCEPTED RISK** |
+| **F-06** no limiter on `/agent/enroll/poll` | Low | Route now sits behind `createPublicRateLimiter('agent-poll')`; the follow-up test asserts rate-limit headers on that route. | **FIXED** |
+| **F-07** `.gitleaks.toml` allowlists `*.md` | Low | Not changed in W6 (config hygiene, W7/W9 candidate). Local grep + CI scan found no committed secrets. Tracked as KI-021. | **OPEN** |
+
+**Refreshed totals for the final tree:** A9's original 148 checks → **132 PASS / 16 FAIL** at the W6
+snapshot; of the failing findings, **F-01, F-02, F-03, F-06 are now FIXED and regression-tested**,
+F-04/F-07 remain open Low, F-05 accepted. **No Critical/High findings were ever reported**, and the
+W6 gate E2E suite (reconnect/security/viewport/insights/admin/notifications/settings/schedule/
+session-reporting/focus/pairing/API/smoke) is green on the merged tree.

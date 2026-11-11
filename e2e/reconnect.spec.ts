@@ -26,7 +26,7 @@ import { rmSync } from 'node:fs';
 
 import { expect, test } from '@playwright/test';
 
-import { listSessions, rawApiRequest } from './helpers/api';
+import { listSessions, rawApiRequest, registerUser } from './helpers/api';
 import { startFocusViaUi, stubNativeAgentDialogs } from './helpers/focus-flow';
 import { pairAgentViaUi } from './helpers/pairing';
 
@@ -38,7 +38,16 @@ test.describe('Reconnect after a real agent crash (T-080)', () => {
     test.slow();
     test.setTimeout(180_000);
 
-    const { agent, accessToken } = await pairAgentViaUi(page, request);
+    // Isolation: pairing has a per-user attempt/single-use latch (DEC-017), so a spec that re-pairs
+    // after a crash must not share the demo user with other specs (the 5th+ attempt answers 410).
+    // A fresh account is also free of leftover devices/sessions from earlier specs.
+    const { credentials, auth } = await registerUser(request);
+    // `/auth/login` is strict: send only email+password (registerUser's credentials also carry `name`).
+    const { agent } = await pairAgentViaUi(page, request, {
+      email: credentials.email,
+      password: credentials.password,
+    });
+    const accessToken = auth.accessToken;
     // REC-004 native first-run consent is answered inside the agent process only (KI-011 seam); a web
     // page must never be able to answer it, and without the stub the first `enterFocus` never returns.
     await stubNativeAgentDialogs(agent);
@@ -51,7 +60,7 @@ test.describe('Reconnect after a real agent crash (T-080)', () => {
       const clientSessionId = (active as { clientSessionId: string }).clientSessionId;
 
       await test.step('SIGKILL the agent → the dashboard shows the honest lost-contact state', async () => {
-        agent.killProcess();
+        await agent.killProcess();
 
         // F-02 copy on /focus + the AppShell badge must both tell the truth (no fake Connected).
         await expect(page.getByText(/Lost contact with your Focus Agent/i).first()).toBeVisible({
@@ -93,21 +102,43 @@ test.describe('Reconnect after a real agent crash (T-080)', () => {
 
       await test.step('re-attest after the documented re-pair fallback (badge Connected)', async () => {
         await page.getByRole('link', { name: 'Devices' }).first().click();
-        await page.getByRole('button', { name: 'Pair a device' }).first().click();
-        const dialog = page.getByRole('dialog', { name: 'Pair a device' });
-        const code =
-          (await relaunched?.window.locator('#pairing-code').textContent())?.replace(/\D/g, '') ??
-          '';
-        expect(code, 'the unpaired relaunched agent must show a fresh 6-digit code').toMatch(
-          /^\d{6}$/,
-        );
-        await dialog.getByLabel('6-digit pairing code').fill(code);
-        await dialog.getByRole('button', { name: 'Pair device' }).click();
 
-        // Re-attestation: only the real EdDSA attestation path flips the badge to Connected.
-        await expect(
-          page.getByRole('status', { name: 'Focus Agent status: Connected' }),
-        ).toBeVisible({ timeout: 45_000 });
+        // The crashed process is dead; the replacement may still be rotating its pairing state when
+        // the dialog asks for a code, so read the CURRENT code immediately before each submit and
+        // retry with a fresh one if the server answers INVALID_PAIRING_CODE (the dialog shows the
+        // approved inline error). This is the real UI path, not a stub.
+        const dialog = page.getByRole('dialog', { name: 'Pair a device' });
+        const agentWindow = relaunched.window;
+        const badge = page.getByRole('status', { name: 'Focus Agent status: Connected' });
+
+        await page.getByRole('button', { name: 'Pair a device' }).first().click();
+        await expect(dialog).toBeVisible();
+
+        let paired = false;
+        for (let attempt = 1; attempt <= 3 && !paired; attempt += 1) {
+          const code =
+            (await agentWindow.locator('#pairing-code').textContent())?.replace(/\D/g, '') ?? '';
+          expect(code, `attempt ${attempt}: the relaunched agent must show a 6-digit code`).toMatch(
+            /^\d{6}$/,
+          );
+          await dialog.getByLabel('6-digit pairing code').fill(code);
+          await dialog.getByRole('button', { name: 'Pair device' }).click();
+          paired = await badge
+            .waitFor({ state: 'visible', timeout: 20_000 })
+            .then(() => true)
+            .catch(() => false);
+          if (!paired) {
+            // The dialog stays open with the approved error; clear the field and try the next code.
+            await dialog
+              .getByLabel('6-digit pairing code')
+              .fill('')
+              .catch(() => undefined);
+          }
+        }
+        expect(paired, 're-pairing the relaunched agent must end with the Connected badge').toBe(
+          true,
+        );
+        await expect(dialog).toBeHidden();
       });
 
       await test.step('the queued CRASH_RECOVERY report finalises the session exactly once (API truth)', async () => {

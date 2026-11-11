@@ -60,6 +60,9 @@ async function main(): Promise<void> {
   setDefault('RATE_LIMIT_AUTH_MAX', '1000');
   // env.ts caps: RATE_LIMIT_API_MAX <= 100_000, the per-resource limiters <= 10_000.
   setDefault('RATE_LIMIT_API_MAX', '100000');
+  // The full E2E suite launches several REAL agents from 127.0.0.1 within a minute; the production
+  // contract value (5/min/IP on POST /agent/register) would reject the suite's own later launches.
+  setDefault('RATE_LIMIT_AGENT_REGISTER_MAX', '10000');
   for (const name of [
     'RATE_LIMIT_PUBLIC_MAX',
     'RATE_LIMIT_INSIGHTS_MAX',
