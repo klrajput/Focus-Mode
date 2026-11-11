@@ -1,0 +1,73 @@
+# render.yaml — Focus Mode API deployment (W9, T-121).
+# Why: one Render web service runs the Express API + /agent-link WSS + in-process node-cron.
+# Requirements: persistent process, native WebSockets, one PORT, outbound TLS to Atlas.
+#
+# IMPORTANT (honest): `plan: free` instances sleep after idle — while asleep node-cron does not tick,
+# so a scheduled focus minute can be skipped without even a MISSED row (docs/DEPLOYMENT.md §4.2).
+# Use `starter` for the demo week, or wake the service + keep it warm for schedule demos.
+#
+# Secrets use `sync: false` = set them in the Render dashboard; never commit real values.
+services:
+  - type: web
+    name: focus-mode-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: npm ci && npm run build -w @focus-mode/shared && npm run build -w @focus-mode/server
+    startCommand: npm run start -w @focus-mode/server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: '22'
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 30m
+      - key: PAIR_PEPPER
+        sync: false
+      - key: ATTEST_PRIVATE_KEY
+        sync: false
+      - key: ATTEST_PUBLIC_KEY
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: AGENT_ALLOWED_ORIGINS
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      # W6 rate limiting / proxy: exactly one reverse proxy in front of Render.
+      - key: TRUST_PROXY
+        value: '1'
+      - key: RATE_LIMIT_AUTH_MAX
+        value: '10'
+      - key: RATE_LIMIT_API_MAX
+        value: '600'
+      - key: RATE_LIMIT_PUBLIC_MAX
+        value: '60'
+      - key: RATE_LIMIT_AGENT_REGISTER_MAX
+        value: '5'
+      - key: RATE_LIMIT_INSIGHTS_MAX
+        value: '60'
+      - key: RATE_LIMIT_NOTIFICATIONS_MAX
+        value: '120'
+      - key: RATE_LIMIT_USERS_MAX
+        value: '60'
+      - key: RATE_LIMIT_SESSIONS_MAX
+        value: '120'
+      - key: RATE_LIMIT_ADMIN_MAX
+        value: '120'
+      # Seed credentials: only needed for the one-off `npm run seed` run (set then remove/rotate).
+      - key: SEED_ADMIN_EMAIL
+        value: admin@demo.com
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_USER_EMAIL
+        value: kabir@demo.com
+      - key: SEED_USER_PASSWORD
+        sync: false
