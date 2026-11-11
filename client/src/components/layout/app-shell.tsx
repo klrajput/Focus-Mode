@@ -142,7 +142,6 @@ function AccountMenu() {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Account menu for ${initial} ${user.name}`}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
           if (event.key === 'Escape') setOpen(false);
@@ -161,6 +160,9 @@ function AccountMenu() {
         <span className="hidden max-w-[10rem] truncate text-[13px] font-medium text-ink sm:inline">
           {user.name}
         </span>
+        {/* Accessible name comes from content (axe requires the visible "K"+"Kabir" sequence);
+            this suffix names the control without overriding the computed name. */}
+        <span className="sr-only"> account menu</span>
       </button>
 
       {open ? (
