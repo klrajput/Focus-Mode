@@ -53,7 +53,7 @@ Two practical consequences of that block:
 | Windows x64 | `windows-latest` | `nsis`, `portable` | `focus-mode-agent-<ver>-win-setup.exe`, `focus-mode-agent-<ver>-win-portable.exe` | Per-user install, **no admin** (`perMachine: false`, `allowElevation: false`), uninstaller included; app data (journal/settings) kept on uninstall (`deleteAppDataOnUninstall: false`). |
 | macOS arm64 | `macos-latest` (Apple Silicon) | `dmg`, `zip` | `focus-mode-agent-<ver>-mac-arm64.dmg`, `…-mac-arm64.zip` | `NSAppleEventsUsageDescription` set for the JXA fallback. |
 | macOS x64 | `macos-15-intel` | `dmg`, `zip` | `focus-mode-agent-<ver>-mac-x64.dmg`, `…-mac-x64.zip` | `macos-13` is retired — never use it. Intel runners are planned to retire fall 2027 (§8). |
-| Linux x64 | `ubuntu-24.04` | `AppImage`, `deb` | `focus-mode-agent-<ver>-linux-x64.AppImage`, `…-linux-x64.deb` | `rpm` is **optional and not built** (needs `rpm` tooling on the runner). |
+| Linux x64 | `ubuntu-24.04` | `AppImage`, `deb` | `focus-mode-agent-<ver>-linux-x86_64.AppImage`, `…-linux-amd64.deb` | `rpm` is **optional and not built** (needs `rpm` tooling on the runner). |
 
 Workflow artifact bundles are named `focus-agent-<name>` (`windows-x64`, `macos-arm64`,
 `macos-x64`, `linux-x64`, retention 14 days), with the per-OS smoke logs as
@@ -248,9 +248,9 @@ Unsigned builds are a documented limitation (PROJECT.md C5, NFR-012), not hidden
 
 ### 6.3 Linux
 
-- AppImage: `chmod +x focus-mode-agent-<ver>-linux-x64.AppImage && ./focus-mode-agent-<ver>-linux-x64.AppImage`
+- AppImage: `chmod +x focus-mode-agent-<ver>-linux-x86_64.AppImage && ./focus-mode-agent-<ver>-linux-x86_64.AppImage`
   (on systems without FUSE use `--appimage-extract` and run `squashfs-root/AppRun`).
-- deb: `sudo apt install ./focus-mode-agent-<ver>-linux-x64.deb` (apt resolves the Electron runtime deps;
+- deb: `sudo apt install ./focus-mode-agent-<ver>-linux-amd64.deb` (apt resolves the Electron runtime deps;
   `dpkg -i` works but may leave dependencies unmet).
 - Window-aside works on X11 only; Wayland reports `capabilities.focus = "unsupported"` (product
   limitation documented in `docs/PLATFORMS.md`).

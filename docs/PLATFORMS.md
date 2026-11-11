@@ -73,7 +73,7 @@ The release workflow has produced **real unsigned installers** on native GitHub 
 | Windows x64 | `nsis`, `portable` | `focus-mode-agent-0.1.0-win-setup.exe`, `focus-mode-agent-0.1.0-win-portable.exe` | CI build + `AGENT_SMOKE` job green (sizes/sha256 in the run log) |
 | macOS arm64 | `dmg`, `zip` | `focus-mode-agent-0.1.0-mac-arm64.dmg`, `…-mac-arm64.zip` | CI build + smoke green; local dev machine sandbox blocked `hdiutil` (NEEDS-HUMAN/CI) |
 | macOS x64 | `dmg`, `zip` | `focus-mode-agent-0.1.0-mac-x64.dmg`, `…-mac-x64.zip` | CI build + smoke green (`macos-15-intel` runner) |
-| Linux x64 | `AppImage`, `deb` | `focus-mode-agent-0.1.0-linux-x64.AppImage`, `focus-mode-agent-0.1.0-linux-x64.deb` | CI build + smoke green (Xvfb); `rpm` intentionally not built |
+| Linux x64 | `AppImage`, `deb` | `focus-mode-agent-0.1.0-linux-x86_64.AppImage`, `focus-mode-agent-0.1.0-linux-amd64.deb` | CI build + smoke green (Xvfb); `rpm` intentionally not built |
 
 Important scope of this evidence, in plain language:
 
