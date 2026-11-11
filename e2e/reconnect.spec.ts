@@ -27,7 +27,7 @@ import { rmSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 import { listSessions, rawApiRequest } from './helpers/api';
-import { startFocusViaUi } from './helpers/focus-flow';
+import { startFocusViaUi, stubNativeAgentDialogs } from './helpers/focus-flow';
 import { pairAgentViaUi } from './helpers/pairing';
 
 test.describe('Reconnect after a real agent crash (T-080)', () => {
@@ -39,6 +39,9 @@ test.describe('Reconnect after a real agent crash (T-080)', () => {
     test.setTimeout(180_000);
 
     const { agent, accessToken } = await pairAgentViaUi(page, request);
+    // REC-004 native first-run consent is answered inside the agent process only (KI-011 seam); a web
+    // page must never be able to answer it, and without the stub the first `enterFocus` never returns.
+    await stubNativeAgentDialogs(agent);
     const agentUserDataDir = agent.userDataDir;
     let relaunched: Awaited<ReturnType<typeof agent.relaunch>> | undefined;
     try {

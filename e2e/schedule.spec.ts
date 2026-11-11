@@ -26,6 +26,7 @@ import {
   listNotifications,
   listSchedules,
   listSessions,
+  rawApiRequest,
   registerUser,
   type ApiSchedule,
 } from './helpers/api';
@@ -220,6 +221,13 @@ test.describe('Missed scheduled run (agent offline)', () => {
     // another spec's leftover ACTIVE session can never make this offline-at-due-time test flaky.
     const { auth } = await registerUser(request);
     const accessToken = auth.accessToken;
+    // A fresh account defaults to timezone `UTC` (User model), while `dueIn()` computes the due time in
+    // the user's IANA timezone that the scheduler reads (`Asia/Kolkata` for the DEC-013 demo fixture).
+    // Align the fixture's timezone, otherwise the schedule is due in the wrong local minute.
+    const profile = await rawApiRequest(request, accessToken, 'PATCH', '/users/me', {
+      timezone: USER_TIMEZONE,
+    });
+    expect(profile.status, 'the missed-run fixture must use the demo timezone').toBe(200);
 
     // The seed already contains one SCHEDULE_MISSED notification; take a baseline so only the NEW
     // notification created for this schedule can satisfy the assertion (no false positive).
