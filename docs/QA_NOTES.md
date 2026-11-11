@@ -77,10 +77,10 @@ thresholds configured, so this is measurement rather than a gate).
 | workspace | test files | tests (all pass) | % stmts | % branch | % funcs | % lines |
 |---|---|---|---|---|---|---|
 | `shared` | 8 | 175 | 100.00 | 95.45 | 100.00 | 100.00 |
-| `server` | 22 | 345 | 87.71 | 76.30 | 93.28 | 89.44 |
-| `client` | 26 | 171 | 78.61 | 72.68 | 80.43 | 80.70 |
-| `agent` | 36 | 513 | 85.91 | 77.33 | 85.71 | 88.63 |
-| **total** | **92** | **1204** | — | — | — | — |
+| `server` | 29 | 450 | 92.96 | 85.07 | 95.30 | 94.31 |
+| `client` | 36 | 251 | 85.23 | 79.09 | 85.89 | 87.45 |
+| `agent` | 38 | 545 | 90.49 | 81.70 | 89.73 | 93.13 |
+| **total** | **111** | **1421** | — | — | — | — |
 
 Coverage target from TECHNICAL_DESIGN §14 is **80 % lines on `shared`, `server/services`,
 `agent/focus`** (excluding drivers' OS calls): `shared` 100 %, `server/services` 91.87 %,
@@ -277,3 +277,25 @@ is why gate evidence is captured in this file rather than on every push.
 After these two fixes, the two runs above are **fully green** and were run back-to-back on the final
 tree; the fixed specs were also re-run individually before the pair (settings 3/3, schedule 2/2).
 
+## 9. W7 quality-gate measurement (A0, merged tree @ `01d5490`)
+
+- **Unit/integration:** `175 + 450 + 251 + 545 = 1421` passed across 111 files (W7 added +217 tests:
+  server error-mapping/races/JWT/env, agent win32 FFI + drivers, client pages/routes/auth, plus
+  route-level app tests). Lint/format/typecheck/build clean; CI green on ubuntu-24.04 / macOS /
+  Windows after the tampered-signature test was made deterministic (a base64url padding flake).
+- **Coverage (lines / branch):** `shared` 100.00 / 95.45 · `server` **94.31 / 85.07** (was 89.44 /
+  76.30) · `client` **87.45 / 79.09** (was 80.70 / 72.68) · `agent` **93.13 / 81.70** (was 88.63 /
+  77.33). Weak-file gaps closed: `win32.ts` 56.77→96.61 % lines, `mongo-errors.ts` 62.5→100,
+  `jwt-eddsa.ts` 29.72→100, `env.ts` 69.56→100, `session-id.ts` 20→100, `login.tsx` 58.33→100.
+  Deliberately unpainted (defensive/race-only branches) are listed in the W7 worker reports.
+- **Bundle:** route-level split measured in `docs/QA_NOTES.md` §2 context — entry chunk
+  1,013.13→165.90 KiB raw (−83.6 %), eager first load 1,013.13→557.38 KiB (−45 %), largest chunk
+  368.95 KiB (`charts`, `/insights` only), no chunk >500 kB.
+- **E2E:** **50/50 passed twice back-to-back** (7.6 m / 7.0 m, retries 0), 15 files, incl. the new
+  real-browser axe spec (14 routes, **0 serious/critical and 0 other violations**; 3 real a11y
+  defects found and fixed in production code), stability policy in §7, per-spec durations in §8.2.
+- **Supply chain:** CI secret scan now runs full history on every push+PR — real proof: 140 commits
+  reachable / 104 scanned / 3.75 MB / **no leaks found** (KI-021 fixed by narrowing the allowlist).
+- **Packaging:** release dry-run `42977816541` = **success**: 4/4 builds, fuses+asar gates green,
+  **4/4 source AGENT_SMOKE and 4/4 packaged-artifact smoke** (macOS `.app`, Linux `squashfs-root`,
+  Windows `win-unpacked`), **0 GitHub Releases** (tag-only guard).
