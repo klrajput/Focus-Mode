@@ -1,8 +1,8 @@
 # INTEGRATION_CONTRACTS.md — frozen contracts for Focus Mode (contracts-v1)
 
-> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1–W5 implemented and merged (W5 gate: 1128 unit tests, 27/27 E2E, 0 skipped), **W6 in progress**. W2 decisions (DEC-013/014/015/016), W3/W4 additions C-14…C-20 and W5 additions C-21…C-25 are recorded below and verified against shipped code (§10). All role sign-offs ACCEPTED (§10).
+> **Owner:** A2 (Software Architect) · **Task:** T-005 · **Status:** **FROZEN (contracts-v1)** — protocol `v1`; W1–W7 implemented and merged (**W5 gate:** 1128 unit tests, 27/27 E2E; **W6 gate:** security hardening, no Critical/High; **W7 gate:** **1421 unit tests — server 450** — and **50/50 E2E twice back-to-back**, coverage ≥ 80 % lines in every package). W2 decisions (DEC-013/014/015/016), W3/W4 additions C-14…C-20, W5 additions C-21…C-25 and the W6 security addition **C-26** (server-side single-use attestation nonce cache — DEC-025) are recorded below and verified against shipped code (§10). **W7 changed no wire format.** All role sign-offs ACCEPTED/SIGNED (§10).
 > **Machine-readable source of truth:** `shared/src/` (zod schemas + inferred types). This document is the human-readable contract and is kept consistent with it by `/tmp/a2-contracts/check.mjs` (§11).
-> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016/017/019/021/022/023/024** · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
+> **Sources:** `TECHNICAL_DESIGN.md` §4–§6, §7.2, §9–§10, §17 · `REQUIREMENTS.md` FR/NFR/SEC · `docs/DECISIONS.md` DEC-002/003/005/006/009/012/**013/014/015/016/017/019/021/022/023/024/025/026** · `docs/SECURITY_REVIEW.md` §8 (F-01…F-07) · `docs/UX_SPEC.md` §1/§6 (tokens + user-facing copy only).
 > **Change process:** any change to a message, endpoint, schema, field or status code requires an ADR + this doc + `shared/` update + A2 + A8 approval + a contract test (AGENTS §5). Requests go in the table in §8 — do not edit the doc directly without that process.
 
 ---
@@ -109,7 +109,7 @@
 | `401 Unauthorized` | `UNAUTHENTICATED` | missing/invalid Bearer token, wrong current password, rejected attestation, device token invalid |
 | `403 Forbidden` | `FORBIDDEN`, `ACCOUNT_DISABLED` | wrong role, foreign Origin at WS upgrade, deactivated account |
 | `404 Not Found` | `NOT_FOUND` | unknown id **or** a resource owned by another user (never reveal existence) |
-| `409 Conflict` | `CONFLICT`, `ALREADY_FOCUSING`, `NO_DEVICE_CONNECTED` | duplicate email, second ACTIVE session per device, no connected device to focus, duplicate `clientSessionId` with different body |
+| `409 Conflict` | `CONFLICT`, `ALREADY_FOCUSING`, `NO_DEVICE_CONNECTED` | duplicate email, second ACTIVE session per device, no connected device to focus, duplicate `clientSessionId` with different body, **replayed attestation nonce inside its 60 s TTL (C-26)** |
 | `410 Gone` | `PAIRING_EXPIRED` | the pairing code existed and is permanently invalid (TTL/attempts/consumed) |
 | `429 Too Many Requests` | `RATE_LIMITED` | auth 10/15 min/IP, pair 10/min/user, agent register 5/min/IP (§1.9) |
 | `500 Internal Server Error` | `INTERNAL` | unexpected failure; generic message only |
@@ -143,7 +143,7 @@ Every list endpoint returns the standard paginated shape and accepts the standar
 
 | Module | Exports used by | Contents |
 |---|---|---|
-| `shared/src/protocol.ts` | client, agent, server (`realtime`), tests | 16 local messages, 5 cloud messages, envelope, unions, type guards, direction tables, `PROTOCOL_VERSION = 1`, `UNAUTHENTICATED_INBOUND_TYPES` |
+| `shared/src/protocol.ts` | client, agent, server (`realtime`), tests | 16 local messages, 6 cloud messages, envelope, unions, type guards, direction tables, `PROTOCOL_VERSION = 1`, `UNAUTHENTICATED_INBOUND_TYPES` |
 | `shared/src/errors.ts` | client, server, agent | `ERROR_CODES` (13), `errorCodeSchema`, `ERROR_HTTP_STATUS`, `httpStatusForErrorCode`, `isErrorCode` |
 | `shared/src/protected.ts` | server, agent, client (read-only display) | `PROTECTED_BY_OS`, `ALL_PROTECTED_KEYS`, `isProtectedEntry`, `isProtectedKey`, `assertNoProtectedRemoval`, `ProtectedEntryError`, `FOCUS_AGENT_APP_KEY` |
 | `shared/src/schemas/` | client, server | request body/query schemas (§3.2) + `appEntrySchema` |
@@ -286,7 +286,7 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 8 | POST | `/devices/pair` | `USER` | `devicePairSchema` | `{"device": device}` (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `INVALID_PAIRING_CODE`, `PAIRING_EXPIRED`, `CONFLICT`, `RATE_LIMITED` |
 | 9 | GET | `/devices` | `USER` | `deviceListQuerySchema` | paginated devices (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
 | 10 | DELETE | `/devices/:id` | `USER` | — | `{"id":"<id>","revoked":true}` (200) | `UNAUTHENTICATED`, `NOT_FOUND` |
-| 11 | POST | `/devices/:id/attest` | `USER` | `attestRequestSchema` | `{"attestation":"<jwt>","expiresAt":"<iso>","algorithm":"EdDSA"}` (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `NO_DEVICE_CONNECTED`, `RATE_LIMITED` |
+| 11 | POST | `/devices/:id/attest` | `USER` | `attestRequestSchema` | `{"attestation":"<jwt>","expiresAt":"<iso>","algorithm":"EdDSA"}` (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `NO_DEVICE_CONNECTED`, `CONFLICT` (replayed `(userId, deviceId, nonce)` inside the 60 s TTL — C-26), `RATE_LIMITED` |
 | 12 | POST | `/sessions` | `USER` | `sessionCreateSchema` | session (**201** first create; **200** on an identical `clientSessionId` replay — C-18/REC-006) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `ALREADY_FOCUSING` |
 | 13 | PATCH | `/sessions/:id` | `USER` | `sessionPatchSchema` | session (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `CONFLICT` |
 | 14 | GET | `/sessions` | `USER` | `sessionListQuerySchema` | paginated sessions (200) | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
@@ -324,6 +324,8 @@ Path is relative to the full API base (§1.1). `Request schema` is the shared zo
 | 46 | GET | `/health/db` | `public` | — | `{"status":"ok","db":"ok"}` (200) or `503` `{"code":"INTERNAL"}` while mongoose is not connected — readiness probe (C-25) | `INTERNAL` (503) |
 
 ADMIN aggregate rule [PDF §6]: `/admin/stats` returns only counts/minutes — never per-user session detail.
+
+**Attestation replay (C-26, DEC-025).** `POST /devices/:id/attest` also answers **`409 CONFLICT`** when the `(userId, deviceId, nonce)` tuple was already used inside the 60 s attestation TTL: the **first** use signs and returns 200, a replay returns no attestation at all. The cache is **server-side, process-local and bounded** (5 000 live keys, oldest quarter evicted under a flood), so it is defence-in-depth behind the agent's own single-use `challenge` (§4.4): the agent still enforces nonce single-use + 60 s TTL and answers a replayed nonce with `authError{code:'UNAUTHENTICATED'}` (C-13). After the 30/min/user limiter (§1.9) and the `400 VALIDATION_ERROR` schema check, the controller's order is `404 NOT_FOUND` (unknown/foreign device) → `409 NO_DEVICE_CONNECTED` → `409 CONFLICT` (replay) → `200`. No request/response schema change — `attestRequestSchema` is unchanged.
 
 Rows **#42–#43** are the W3 additions accepted in **DEC-019** (C-15/C-16); **#44–#46** are the W5 additions/probe variants (C-21/C-23/C-25). The original 41-operation frozen set from TECHNICAL_DESIGN §5.2 is otherwise unchanged (C-17/C-18 clarify existing rows #12/#14/#17). Shipped-code review found **no invented operations** — 46/46 rows match implemented routes.
 
@@ -368,6 +370,7 @@ Every schema is a strict object → unknown fields are rejected (NFR-013); valid
 - **C-23** `POST /devices/unpair-all` — no body; 200 `{unpaired: number}`; the `revoked` frame is pushed to each connected agent first, then all device rows of the caller are deleted (INV-5). Offline devices are revoked in the DB; zero devices → `{unpaired:0}`.
 - **C-24** `GET /insights` — response adds optional `weekly` (present only for `30d`/`90d`); all analytics choices are documented in §3.3.
 - **C-25** admin/health deltas verified against `server/src/services/admin.service.ts` + `health.routes.ts`: `GET /admin/users` accepts optional `role` (`USER|ADMIN`) and `isActive` (`"true"|"false"`, strict string enum) filters on top of the frozen query; `PATCH /admin/users/:id` answers `409 CONFLICT` for self-deactivation **and** self-demotion; `POST`/`PATCH /admin/agent-links` accept only absolute **https** URLs on `github.com` or `objects.githubusercontent.com` (no credentials; otherwise `400 VALIDATION_ERROR` with `details[{path:'url'}]`); `GET /admin/stats` includes four additive aliases; `GET /health/db` is a readiness probe (503 `INTERNAL` when mongoose is down — outside the standard business status table).
+- **C-26** `POST /devices/:id/attest` replay status, verified against `server/src/services/attestation.service.ts`: the same `nonce` for the same `(userId, deviceId)` inside the 60 s TTL → **`409 CONFLICT`** with the standard error envelope and no `data`; a distinct nonce (or the same nonce for another device/user, or after the TTL) still returns 200. Request schema unchanged; the cache is process-local and bounded (defence-in-depth — §3.1 note, §12 C-26).
 
 Mongo collections touched by these endpoints (TECHNICAL_DESIGN §4): `users`, `devices`, `sessions`, `allowlists`, `schedules`, `presets`, `scheduleRuns`, `notifications`, `agentLinks`. The API is the only writer (the dashboard and Focus Agent never touch Mongo directly).
 
@@ -1144,6 +1147,8 @@ These additions were reviewed by **A2 against the W3/W4 code and ADRs (DEC-017/D
 
 **W6 shipped-message review (2026-11-11):** all 16 local + 6 cloud messages match the shipped agent/server code. The `/agent-link` hub accepts exactly the four `AGENT_TO_CLOUD` types (`heartbeat`, `session.started`, `session.ended`, `scheduleRunCancelled`) and still sends only `scheduleDue`/`revoked`; the local link routes authenticated control messages to the W3 handlers. **No message drift found.**
 
+**W7 re-check (2026-11-11):** W7's client route-level code split (`React.lazy` + vendor chunks) and agent hardening changed **no message, field, direction or status code**. `session.started` (incl. optional `scheduleRunId`) and `scheduleRunCancelled` are unchanged, the cloud channel is still 4 up / 2 down, and INV-2 (`[scheduleDue, revoked]`) still holds. **No wire change in W7.**
+
 ---
 
 ## 7. Error handling matrix (REST + local channel)
@@ -1161,6 +1166,8 @@ These additions were reviewed by **A2 against the W3/W4 code and ADRs (DEC-017/D
 | 1 | A2 (shipped-code review, W6) | 2026-11-11 | `/health` probes | Document the shipped `GET /health/db` readiness variant + root `/health` hosting alias, including `503 INTERNAL` when the DB is down (shipped in W1; never in the contract table). | ACCEPTED — documented in C-25 |
 | 2 | A2 (shipped-code review, W6) | 2026-11-11 | Admin API | Document the W5 additive admin surface: four stats aliases, `role`/`isActive` filters, self-demotion/-deactivation `409 CONFLICT`, agent-link https + GitHub host allowlist. | ACCEPTED — documented in C-25 |
 | 3 | A2 (shipped-code review, W6) | 2026-11-11 | List ordering | Record the shipped per-resource orders (notifications `createdAt desc`; presets `createdAt desc`; public agent-links `os,arch,_id`; admin agent-links `publishedAt desc`) instead of the old generic `createdAt desc` sentence. | ACCEPTED — documented in §1.6 / C-25 |
+| 4 | A2 (W7 contract review) | 2026-11-11 | `POST /devices/:id/attest` | Document the shipped server-side single-use nonce replay cache: a replayed `(userId, deviceId, nonce)` inside the 60 s TTL answers `409 CONFLICT` (no attestation), first use still 200. ADR already exists (**DEC-025**), no schema change. | ACCEPTED — folded in as **C-26** (§3.1 #11 + note, §3.2, §12) |
+| 5 | A2 (W7 contract review) | 2026-11-11 | §1.9 rate limits | The shipped W6 limiters are broader than the four rows in §1.9: `RATE_LIMIT_*_MAX` also gates insights (60/min/user), notifications (120/min/user), sessions (120/min/user), user settings (60/min/user), admin (120/min/user), the public/agent routes (`RATE_LIMIT_PUBLIC_MAX`, 60/min/IP, on `/agent/enroll/poll` + `/agent/attest-key`) and a general `/api/v1` flood guard (600/min/IP). Proposed: extend the §1.9 table (documentation only — defaults/security unchanged). | **PENDING** — needs A0/A8 ack; not folded in this pass |
 
 To request a change: add a row here **and** notify A2/A8 and A0 — then follow §9. Do not implement a divergent message/endpoint/schema “just for now”; a rejected request keeps the frozen contract.
 
@@ -1188,12 +1195,17 @@ Rules that never change without replacing an INV in AGENTS §3: envelopes, the 1
 | Desktop Agent | A7 | Local WS server/handshake, all 16 local messages, cloud client/heartbeat/idempotency | **ACCEPTED** | 2026-11-10 | PR #4 merged (agent W1); CI green on ubuntu-24.04/windows-latest/macos-latest; unit/integration 353 tests; W2 cloud/auth tracked in T-042/T-044 |
 | Integration | A8 | Contract tests, env/base-URL convention, pairing flow, cross-package consistency | **ACCEPTED** | 2026-11-10 | 93/93 automated contract checks; pairing E2E green on merged W2; C-12/C-13 match shipped code |
 | Contract fold-in review (W4/W5) | A2 | Shipped-code review of all W4/W5 REST routes + local/cloud messages; C-14…C-25 fold-in | **SIGNED** | 2026-11-11 | 46/46 endpoints, 16/16 local + 6/6 cloud messages verified against code; C-21…C-25 verified; no contract-breaking drift (1128 unit tests + 27/27 E2E at the W5 gate) |
+| W7 contract review — C-26 folded; shipped-code re-check | A2 | C-26 fold-in + shipped-code re-check of the attest route, the cloud/local message set after the W7 client routing/bundle split and agent hardening, and the error envelopes | **SIGNED** | 2026-11-11 | **No wire changes in W7** — `session.started` / `scheduleRunCancelled` unchanged, 46/46 endpoints still match routes; C-26 documented from `attestation.service.ts` + the 409 regression tests (`security-hardening.test.ts`, `attestation.test.ts`, `w6-followup-hardening.test.ts`); W7 gate **1421 unit tests (server 450)** + **E2E 50/50 twice back-to-back**; §11 **36/36** checks + 48/48 JSON examples PASS |
 
 A0 recorded W1 acceptance on 2026-11-10: **PRs #2/#3/#4 merged, CI green on `ubuntu-24.04` / `windows-latest` / `macos-latest`, unit/integration suites 353 tests green**. W2 (pairing + attestation + agent-link hub + agent cloud client + client AgentLink) is **merged to `main` with CI green**. A8 signed off the contract on 2026-11-10 (**93/93 automated contract checks; pairing E2E green on merged W2; C-12/C-13 match shipped code**), so **all five rows are ACCEPTED**; the `contracts-v1` tag stands, and any further wire change follows §9 (`contracts-v1.1`). A8/A0 also confirmed the C-12 wording (404 when `ownerId` is `null` or the enroll secret is wrong/unknown; 200 once paired with a matching secret; 410 once consumed) matches shipped code.
 
 **W4 contract additions** (C-14…C-20; new agent→cloud `scheduleRunCancelled`; optional `session.started.scheduleRunId`) were **A2-reviewed on 2026-11-10** and are recorded in §12; A8 re-checks them in the W4 integration pass.
 
 **W5 contract additions** (C-21…C-25) were reviewed against the **shipped W5 code** and **A2-signed on 2026-11-11**; the W6 delta list (documented drift vs code bugs) is in that task's report. No frozen wire format changed — C-21…C-25 are additive endpoints/fields, response aliases, security tightening and ordering documentation.
+
+**W6 security addition** (**C-26**, server-side single-use attestation nonce replay cache) comes from **DEC-025** and the W6 security fixes in `439792b`; it is documented in §3.1/§3.2/§12 and **adds one error status on an existing route only** (`409 CONFLICT` on `POST /devices/:id/attest`) — no new endpoint, field or message, so `contracts-v1` stands.
+
+**W7 contract review** (2026-11-11): the W7 work was test consolidation, client route-level bundle splitting and agent hardening — **it produced no wire change**. Re-checked against the merged W7 tree: the cloud channel is still 6 messages (4 up / 2 down) with `session.started` and `scheduleRunCancelled` byte-identical in shape, the local channel is still 16 messages, and all 46 endpoints still match their shipped routes and error columns. Evidence at the gate: **1421 unit tests (server 450)**, **E2E 50/50 twice back-to-back** (retries 0, 15 files), §11 36/36 + 48/48 JSON. The only contract-relevant W7 finding was **documentation drift**, not code drift: §1.7 still said 5 cloud messages (fixed here), and the W6 replay-cache tests were labelled `delta C-25` in `attestation.test.ts` (code comment; the contract id is **C-26** — noted for A5, not edited from this task).
 
 ---
 
@@ -1205,9 +1217,11 @@ Run from the repo root (script in `/tmp`, not committed):
 node /tmp/a2-contracts/check.mjs
 ```
 
-Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc is traceable to TECHNICAL_DESIGN §5.2 or an accepted W3/W5 addition (DEC-019, C-21/C-23/C-25), and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented and the cloud→agent whitelist is exactly `[scheduleDue, revoked]`; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) all role sign-offs plus the A2 W4/W5 review line are ACCEPTED/SIGNED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping is documented (W3 control handlers shipped); (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence; (q) cloud channel documents all 6 messages incl. `scheduleRunCancelled` as AGENT_TO_CLOUD; (r) `session.started.scheduleRunId` is documented (DEC-021/C-19); (s) C-14…C-25 are documented; (t) the W4/W5 A2-review lines are present; (u) `GET /users/me`, `unpair-all`, `unreadCount`, insights `weekly` and health `/health/db` are documented; (v) admin deltas C-25 (aliases, filters, self-demotion 409, agent-link https allowlist) are documented; (w) per-resource list orders are documented (§1.6) and the stale W2 control-scope sentence is gone. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, consistent tables, required sections) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 48/48).
+Checks performed: (a) every local/cloud message name in this doc matches `shared/dist` runtime exports; (b) every request-schema name in §3.2 is exported by `shared` and appears in this doc; (c) every endpoint path in this doc is traceable to TECHNICAL_DESIGN §5.2 or an accepted W3/W5 addition (DEC-019, C-21/C-23/C-25), and no endpoint is invented; (d) all 9 Mongo collection names from TECHNICAL_DESIGN §4 appear here; (e) all 13 error codes and their HTTP statuses appear here; (f) INV-1…INV-6 are documented and the cloud→agent whitelist is exactly `[scheduleDue, revoked]`; (g) all fenced `json` examples parse as valid JSON; (h) envelope version is `v: 1` / protocol `v1`; (i) DEC-014 two-stage pairing digest is documented; (j) DEC-015 close codes (`1009` oversized frame / `1008` protocol violation) are documented; (k) all role sign-offs plus the A2 W4/W5 review line are ACCEPTED/SIGNED; (l) C-12 pending enroll-poll semantics are documented; (m) C-13 local `auth` error mapping is documented (W3 control handlers shipped); (n) DEC-016 `node:crypto` EdDSA implementation note is documented; (o) C-05 `authError` vocabulary agrees with C-13; (p) A8 sign-off is recorded with evidence; (q) cloud channel documents all 6 messages incl. `scheduleRunCancelled` as AGENT_TO_CLOUD; (r) `session.started.scheduleRunId` is documented (DEC-021/C-19); (s) C-14…C-26 are documented; (t) the W4/W5 A2-review lines are present; (u) `GET /users/me`, `unpair-all`, `unreadCount`, insights `weekly` and health `/health/db` are documented; (v) admin deltas C-25 (aliases, filters, self-demotion 409, agent-link https allowlist) are documented; (w) per-resource list orders are documented (§1.6) and the stale W2 control-scope sentence is gone; (x) **C-26** (DEC-025 single-use attestation nonce cache, `409 CONFLICT` on replay) is documented in §3.1/§3.2/§12 and matches the shipped replay cache + its 409 regression tests. Separate scripts prove the Markdown still parses (`/tmp/a2-contracts/md-check.mjs`: balanced fences, constant table column counts with `\|` escapes honoured, required sections, single H1, balanced inline code) and that the JSON examples are valid (`/tmp/a2-contracts/json-check.mjs`: 48/48).
 
-Script output (pasted from the actual run, 2026-11-10):
+> The `/tmp` scripts are not committed; they were recreated for this pass from their documented behaviour and assert against `shared/dist`, `TECHNICAL_DESIGN.md`, `docs/DECISIONS.md` and the shipped server sources.
+
+Script output (pasted from the actual run, 2026-11-11 — W7 tree, C-26 folded):
 
 ```
 $ node /tmp/a2-contracts/check.mjs
@@ -1215,8 +1229,10 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] local messages documented (§4.5) — 16/16 documented, missing=[]
 [PASS] local message directions match LOCAL_MESSAGE_DIRECTIONS — 16/16 exact
 [PASS] cloud messages documented (§5.3) — 6/6 documented, missing=[]
-[PASS] cloud directions match CLOUD_MESSAGE_DIRECTIONS — 5/5 exact
-[PASS] INV-2: cloud→agent set is exactly [revoked, scheduleDue] — cloud→agent=[scheduleDue,revoked]
+[PASS] cloud directions match CLOUD_MESSAGE_DIRECTIONS — 6/6 exact
+[PASS] INV-2: cloud→agent set is exactly [revoked, scheduleDue] — cloud→agent=[revoked,scheduleDue]
+[PASS] DEC-021 new message scheduleRunCancelled is AGENT_TO_CLOUD (cloud channel 6 = 4 up / 2 down) — types=6, up=4, down=[revoked,scheduleDue]
+[PASS] session.started.scheduleRunId is optional in shared and documented (DEC-021/C-19) — schemaHasField=true, docMentionsDEC-021=true
 [PASS] request schemas exported by shared and named in doc — 23/23 ok, notExported=[], notInDoc=[]
 [PASS] endpoint table matches the frozen 41-operation set — 46/46 documented, missing=[], invented=[]
 [PASS] every documented path is traceable to TECHNICAL_DESIGN §5.2, DEC-019 or W5 C-21/C-23/C-25 — 46/46 traceable, adrMissing=[], w5RefMissing=[], unknown=[]
@@ -1231,24 +1247,37 @@ $ node /tmp/a2-contracts/check.mjs
 [PASS] DEC-014 two-stage pairing digest documented — SHA-256(domain|code) -> HMAC(PAIR_PEPPER, codeHmac), TTL 10 min, <=5 attempts, single use
 [PASS] DEC-015 close codes documented (1009 oversized frame / 1008 protocol violation) — both treated as a disconnect
 [PASS] C-12 pending enroll-poll semantics documented (§3.1 #38, §3.2, §5.1) — 404 pending/unpaired + bad secret, 410 consumed; agent retries 404/202/204/200-without-token
-[PASS] C-13 local auth error mapping + W2 control-message scope documented (§4.3) — wrong sub -> FORBIDDEN; others -> UNAUTHENTICATED; control msgs -> INVALID until W3
+[PASS] C-13 local auth error mapping + W3 control-message scope documented (§4.3) — wrong sub -> FORBIDDEN; others -> UNAUTHENTICATED; control msgs routed to W3 handlers
 [PASS] DEC-016 node:crypto EdDSA implementation note documented (§1.11/§4.4/§5.2/§6.1/§12) — EdDSA/Ed25519 via node:crypto; jsonwebtoken only HS256 user tokens
 [PASS] C-05 authError vocabulary agrees with C-13 (§4.3/§4.5/§12) — wrong sub -> FORBIDDEN; everything else -> UNAUTHENTICATED; NOT_PAIRED only focusRejected
-[PASS] A8 sign-off recorded with evidence (93/93 checks, pairing E2E, C-12/C-13) — all five §10 rows ACCEPTED
-[PASS] DEC-021 new message scheduleRunCancelled is AGENT_TO_CLOUD (cloud channel 6 = 4 up / 2 down) — types=6, up=4, down=[scheduleDue,revoked]
-[PASS] session.started.scheduleRunId is optional in shared and documented (DEC-021/C-19) — schemaHasField=true, doc mentions DEC-021=true
-[PASS] contract decisions C-14…C-20 documented in §12 — 7/7 present, missing=[]
+[PASS] A8 sign-off recorded with evidence (93/93 checks, pairing E2E, C-12/C-13) — all five original §10 rows ACCEPTED
+[PASS] contract decisions C-14…C-26 documented in §12 — 13/13 present, missing=[]
 [PASS] W4 additions recorded as A2-reviewed (§10/§6.2) — §10 + §6.2 present
 [PASS] schedule-run lifecycle C-19 documented (STARTED confirm/cancel/offline MISSED/stale 2 min) — dispatch→confirm→CANCELLED_BY_USER | offline MISSED | stale 2 min MISSED
 [PASS] W5 additions C-21…C-24 documented (users/me, unreadCount, unpair-all, insights weekly + analytics choices) — endpoint rows #44/#45 + C-21…C-24 rows + §3.3 shapes
 [PASS] C-25 admin/health deltas documented (aliases, filters, self-demotion 409, https host allowlist, /health/db) — stats aliases + filters + CONFLICT + allowlist + readiness probe
-[PASS] control-message section updated to shipped W3 behaviour (no stale W2 scope) — §4.3 + C-13 agree
 [PASS] per-resource list orders documented in §1.6 (C-18/C-25) — schedules/notifications/presets/agent-links
-[PASS] §8 requested-changes records the real shipped-code drift (3 accepted rows) — health probes + admin API + list ordering
-[PASS] §10 A2 W4/W5 review sign-off recorded — SIGNED 2026-11-11 with evidence
-RESULT: 35/35 checks PASS
+[PASS] control-message section updated to shipped W3 behaviour (no stale W2 scope) — §4.3 + C-13 agree
+[PASS] §8 requested-changes records the real shipped-code drift (4 accepted rows) — health probes + admin API + list ordering + C-26 (4 rows)
+[PASS] §10 A2 W4/W5 contract-review sign-off recorded — SIGNED with evidence
+[PASS] C-26 attestation nonce replay cache documented (DEC-025) + shipped evidence — §12 C-26 row + §3.1 #11 CONFLICT + attestation.service.ts replay cache + 409 test
+RESULT: 36/36 checks PASS
 $ echo $?
 0
+```
+
+```
+$ node /tmp/a2-contracts/md-check.mjs
+[PASS] code fences are balanced — 104 fence markers (52 blocks)
+[PASS] every table has a constant column count — 22 tables
+[PASS] all 14 required sections present (§0–§13) — missing=[]
+[PASS] single H1 and no duplicated headings — H1=1, duplicated=[]
+[PASS] inline code backticks are balanced per line — odd-count lines=[]
+[PASS] every table has a separator row under the header — 22 tables checked
+RESULT: 6/6 markdown checks PASS
+$ node /tmp/a2-contracts/json-check.mjs
+[PASS] all 48 fenced JSON examples parse
+RESULT: 48/48 JSON examples valid
 ```
 
 > The script prints the same lines when re-run; if it fails after a contract change, **do not commit the change** until §9 is followed.
@@ -1257,7 +1286,7 @@ $ echo $?
 
 ## 12. Clarifications and contract decisions (documented, no silent changes)
 
-These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016, the W3/W4 additions DEC-017/DEC-019/DEC-021 and the W5 additions C-21…C-25 (W5 gate DEC-024; admin deltas from the W6 shipped-code review). Items marked **ADR** need an ADR before implementation reaches them.
+These points are under-specified in TECHNICAL_DESIGN; the choice below is now part of `contracts-v1` plus the W2 amendments DEC-014/DEC-015/DEC-016, the W3/W4 additions DEC-017/DEC-019/DEC-021, the W5 additions C-21…C-25 (W5 gate DEC-024), the W6 security addition C-26 (W6 gate DEC-025) and the admin deltas from the W6 shipped-code review. Items marked **ADR** need an ADR before implementation reaches them.
 
 | # | Topic | Decision / issue | Owner | Needs ADR |
 |---|---|---|---|---|
@@ -1286,6 +1315,7 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 | C-23 | `POST /devices/unpair-all` | **ACCEPTED (W5, verified shipped).** USER-scoped, no body, 200 `{unpaired:number}`. For each device the `revoked` frame is pushed first (agent restores + IDLE, INV-5), then the row/token hash is deleted; offline devices are still revoked; zero devices → `{unpaired:0}` (FR-029). | A5/A4 | no |
 | C-24 | Insights `weekly` + analytics choices | **ACCEPTED (W5, verified shipped).** Additive optional `weekly:[{weekStart, minutes}]` present only for `30d`/`90d` (Monday-start `YYYY-MM-DD`). Documented choices: `daily` is always the last 7 local days regardless of range; minutes are COMPLETED-only (ACTIVE/CANCELLED excluded — FR-028); completionRate = COMPLETED÷(COMPLETED+CANCELLED) rounded 3dp, 0 when none; streaks are all-time COMPLETED days with ≥10 min anchored today/yesterday; bestHours = top-3 local hours in the range; all bucketing uses the user's IANA timezone via `Intl` (DST-correct). | A5/A4 | no |
 | C-25 | Admin/health shipped deltas | **ACCEPTED (shipped-code review, W6 — documented, no wire change).** (1) `GET /admin/stats` = 7 canonical keys + four additive aliases `{totalUsers,totalSessions,totalFocusMinutes,devicesConnected}`; `connectedDevices` counts `CONNECTED` or `FOCUSING`; `focusMinutes` = Σ `actualMinutes` over all sessions rounded 0.1. (2) `GET /admin/users` adds strict `role`/`isActive` filters (server-side extension of the frozen schema). (3) `PATCH /admin/users/:id` self-deactivation **and** self-demotion → `409 CONFLICT`. (4) Agent-link create/update URLs must be absolute https on `github.com`/`objects.githubusercontent.com`, no credentials (`400 VALIDATION_ERROR`, `details[{path:'url'}]`). (5) `GET /health/db` readiness probe (503 `INTERNAL` while mongoose disconnected; `/health` is also aliased at the process root). (6) Per-resource list orders fixed in §1.6. | A2/A5 | no — documented |
+| C-26 | Attestation nonce single use (server side) | **ACCEPTED — DEC-025** (W6 security fix `439792b`; re-verified on the shipped W7 tree). `POST /devices/:id/attest` keeps a **server-side replay cache keyed `(userId, deviceId, nonce)`**: the **first** use inside the 60 s attestation TTL signs and returns `200` with `{attestation, expiresAt, algorithm:"EdDSA"}`; replaying the same tuple while the entry is live answers **`409 CONFLICT`** in the standard error envelope (`{success:false,error:{code:"CONFLICT",message:"This attestation nonce was already used."}}`) and **no** attestation. A different nonce, the same nonce for another `(userId, deviceId)`, and the same tuple **after** the 60 s TTL all still succeed. The cache holds expiry timestamps only (never the token), prunes expired entries lazily on each call and is **capped at 5 000 live keys** (oldest quarter evicted under a flood) so a hostile client cannot grow memory without bound. **Defence-in-depth, not the primary gate:** the agent's `challenge` nonce stays single-use and bound by §4.4/C-13 (a replayed nonce there → `authError{code:'UNAUTHENTICATED'}`), the 30/min/user limiter (§1.9) still applies, and the cache is **process-local** — correct for the single-instance API in TECHNICAL_DESIGN §8; a future multi-instance deployment would need a shared store (documented limit, not a wire change). **No schema change:** `attestRequestSchema` is unchanged and no new endpoint/field/message was added — only a new error status on an existing route (§3.1 #11, §3.2 bullet). | A5/A2 | no — DEC-025 |
 
 ---
 
@@ -1298,4 +1328,5 @@ These points are under-specified in TECHNICAL_DESIGN; the choice below is now pa
 - Post-W2 documentation pass c (branch `feat/a2-contracts-c05`, this file only): `docs(contracts): fix C-05 auth error vocabulary and record A8 sign-off` — C-05 rewritten to reference C-13 (§4.3/§4.5/§12 agree, `NOT_PAIRED` is `focusRejected` only), A8 sign-off recorded in §10 (all five rows ACCEPTED), header/§13 status updated. No code, schema or wire changes.
 - W4 contract pass (branch `feat/a2-w4-contracts`): `feat(shared): add schedule-run lifecycle message and document W3/W4 contracts` — `shared/src/protocol.ts` adds optional `session.started.scheduleRunId` + new agent→cloud `scheduleRunCancelled`; this doc records C-14…C-20 (§1.6, §3.1, §3.2, §4.5, §5.3, §5.4, §5.5, §6.2, §10, §12). No other package touched.
 - W6 contract pass (branch `feat/a2-w6-contracts`): `docs(contracts): fold in W5 contracts and review shipped endpoints` — C-21…C-25 folded in and verified against shipped code; §8 records three accepted contract-surface deltas (health probes, admin API, list ordering); §10 adds the A2 W4/W5 review line; endpoint table 43 → 46; §11 counts updated (46 endpoints, 48 JSON examples). No source/shared edits.
+- W7 contract pass (branch `feat/a2-w9-contracts`, this file only): `docs(contracts): fold in C-26 and sign off the W7 contract review` — **C-26** (server-side single-use attestation nonce cache, DEC-025) added to §3.1 #11 (`409 CONFLICT`) + a route note, to §3.2 as a C-26 bullet and to §12 as its own row; §10 gains the **W7 contract review — SIGNED** row with the W7 gate evidence; §11 gains check (x) and the re-run output (36/36 + 48/48 JSON + 6/6 markdown); header/§1.7 counters refreshed (W1–W7 merged, 6 cloud messages); §6.2 records the W7 no-wire-change re-check. **No source, shared or wire change.**
 - Open: C-04 typed response schemas in `contracts-v1.1` (DEC-015); F-102…F-113 UX polish (A4, W6); W6 security/release gates (A9/A10).
